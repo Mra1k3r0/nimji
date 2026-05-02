@@ -1,0 +1,62 @@
+{
+  // Hi — drop your session secrets here, or keep using .env instead (whatever you prefer).
+  // If both exist, environment variables win so you can override without editing this file.
+  "COOKIES": "",
+  "AT_TOKEN": "",
+  "F_SID": "",
+
+  // "MODEL": leave as "auto" for everyday use — we ship a sensible default build string in code.
+  //
+  // Heads-up: flipping Fast / Pro / Thinking in the Gemini website usually does NOT change the `bl=`
+  // value you see on StreamGenerate, so don't stress if it looks identical everywhere.
+  //
+  // If you're on a paid tier (Google AI Plus / Ultra / Workspace premium), it's worth grabbing your
+  // real `bl=` from the browser once: DevTools → Network → click a StreamGenerate request → copy the
+  // full `boq_assistant-…` query value and paste it into BL_PARAM below. That way you're lined up with
+  // exactly what your account gets served.
+  "MODEL": "auto",
+
+  // CLI chat / one-shot rendering (`--density` / `--answer-style` override).
+  // Root-level `UI_DENSITY` / `UI_ANSWER_STYLE` beat nested `chat` if both are set.
+  "chat": {
+    "UI_DENSITY": "comfortable",
+    "UI_ANSWER_STYLE": "boxed"
+  },
+
+  // Stream timeouts & parser debug (`STREAM_*`, `IMAGE_STREAM_*`, `DEBUG_CANDIDATES`).
+  "runtime": {
+    "STREAM_IDLE_TIMEOUT_MS": "30000",
+    "STREAM_MAX_DURATION_MS": "180000",
+    "IMAGE_STREAM_IDLE_TIMEOUT_MS": "120000",
+    "IMAGE_STREAM_MAX_DURATION_MS": "600000",
+    "DEBUG_CANDIDATES": "0"
+  },
+
+  // In-process CLI keepalive interval + ping text (`nimji --chat --keepalive`). Detached daemon uses same env.
+  "keepalive": {
+    "KEEPALIVE_INTERVAL_MINUTES": "10",
+    "KEEPALIVE_PROMPT": "hi"
+    // Optional file paths / payloads (see README): KEEPALIVE_F_REQ_PATH, KEEPALIVE_RPC, KEEPALIVE_INNER_PAYLOAD,
+    // KEEPALIVE_GOOG_EXT_525001261_JSPB, KEEPALIVE_SESSION_FILE, KEEPALIVE_BASE_DIR
+  },
+
+  // Forged browser tab metadata (override if your capture differs). Also: NIMJI_HOME, GEMAI_HOME, CONVERSATION_ID, …
+  "browser": {
+    "CHROME_FULL_VERSION": "147.0.7727.56",
+    "LANGUAGE": "en",
+    "ACCEPT_LANGUAGE": "en-US,en;q=0.9",
+    "SEC_CH_UA_PLATFORM": "Windows",
+    "SEC_CH_UA_PLATFORM_VERSION": "19.0.0",
+    "X_BROWSER_CHANNEL": "stable"
+    // USER_AGENT, X_BROWSER_VALIDATION, X_CLIENT_DATA, SOURCE_PATH, SESSION_FINGERPRINT, REQUEST_BLOB, …
+  },
+
+  // ImgBB only matters if the image pipeline is re-enabled in images.ts.
+  "upload": {
+    "IMG_BB_EXPIRATION_SEC": "0"
+    // "IMG_BB_API_KEY": "…"
+  }
+
+  // Uncomment and paste from DevTools when you want to pin your premium/build-specific `bl`:
+  // "BL_PARAM": "boq_assistant-bard-web-server_20260427.06_p7"
+}

@@ -1,0 +1,11 @@
+# <type>(<scope>): <subject — lowercase, imperative, no trailing period>
+#
+# body: wrap at ~72 chars; lowercase sentences unless a proper noun requires caps.
+#
+# types: feat | fix | docs | chore | refactor | perf | test | ci | build
+# scopes (examples): nimji | cli | config | deps | parser | transport | session
+#
+# examples:
+# feat(cli): merge config before reading ui density from env
+# fix(parser): skip standalone geo lines in candidate ranking
+# chore(deps): bump undici major and align node engines

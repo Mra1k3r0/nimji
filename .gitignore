@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+config.json
+keepalive-freq.json
+# Session / home dirs (legacy spellings + current nimji defaults)
+.gemai-session.json
+.gemai-keepalive-session.json
+.gemai/
+.gemini-session.json
+.gemini-keepalive-session.json
+.gemini/
+.nimji-session.json
+.nimji-keepalive-session.json
+.nimji/
+.eslintcache
+.cursor/
