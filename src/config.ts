@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -247,7 +248,7 @@ const toNum = (value: string, fallback: number): number => {
 
 const randomSourcePath = (): string => randomUUID().replace(/-/g, "").slice(0, 16);
 
-const DEFAULT_BL_BUILD = "boq_assistant-bard-web-server_20260427.06_p7";
+const DEFAULT_BL_BUILD = "boq_assistant-bard-web-server_20260812.16_p0";
 
 function resolveBlParam(pick: ConfigPick): string {
   const explicitBl = pick("BL_PARAM", "").trim();
@@ -277,7 +278,7 @@ export function loadConfigFromEnv(options?: LoadConfigOptions): GemaiConfig {
   mergeProjectConfigIntoEnv(cwd);
   const pick = makePick(options?.overrides);
 
-  const chromeFullVersion = pick("CHROME_FULL_VERSION", "147.0.7727.56").trim();
+  const chromeFullVersion = pick("CHROME_FULL_VERSION", "151.0.7922.138").trim();
   const userAgentRaw = pick("USER_AGENT", "").trim();
   return {
     auth: {

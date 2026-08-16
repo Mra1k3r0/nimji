@@ -4,16 +4,19 @@ import {
   buildPayload,
   buildStreamGeneratePath,
   buildStreamHeaders,
+  isSessionExpiredResponse,
   parseStreamChunks,
   readStreamWithTimeouts,
+  rotateCookies,
   runBatchexecuteKeepalive,
 } from "./transport.js";
-import { extractResponse, sortStableGoogleImageUrls } from "./parser.js";
-import { downloadImages, upgradeGgDlUrlsFromRedirects } from "./images.js";
+import { discoverLh3ImageUrls, extractResponse, sortStableGoogleImageUrls } from "./parser.js";
+import { downloadImages, upgradeGgDlUrlsFromRedirects, downloadSingleImage } from "./images.js";
 import type {
   CandidateScore,
   ClientOptions,
   ConversationState,
+  GemaiAuth,
   GemaiClient,
   GemaiConfig,
   GemaiHooks,
@@ -42,10 +45,18 @@ export function createClient(
   if (!checked.ok) throw checked.error;
   const cfg = checked.value;
 
+  let authOverride: Partial<GemaiAuth> = {};
+
+  const effectiveAuth = (): GemaiAuth => ({
+    ...cfg.auth,
+    ...authOverride,
+  });
+
   let conversation: ConversationState = { ...(cfg.conversation ?? {}) };
   const options = resolveOptions(hooksOrOptions);
   const hooks = options.hooks;
   let keepaliveTimer: NodeJS.Timeout | null = null;
+  let rotateTimer: NodeJS.Timeout | null = null;
   let requestQueue = Promise.resolve();
 
   const queueGenerate = async (
@@ -62,6 +73,7 @@ export function createClient(
   async function runGenerate(options: GenerateOptions): Promise<Result<GenerateResult>> {
     const requestConfig: GemaiConfig = {
       ...cfg,
+      auth: effectiveAuth(),
       context: {
         ...cfg.context,
         reqId: String(Math.floor(1_000_000 + Math.random() * 9_000_000)),
@@ -106,14 +118,54 @@ export function createClient(
         bodyTimeout: 120_000,
       });
 
+      // mid-stream: grab image urls as chunks arrive
+      const earlyDownloadedPaths: string[] = [];
+      const earlyDownloadedUrls = new Set<string>();
+      const earlyDownloadJobs: Promise<void>[] = [];
+      const seenStreamUrls = new Set<string>();
+      const outputDir = options.imageOutputDir ?? "./output-images";
+      const wantsSave = saveImages;
+
+      const onStreamChunk = wantsSave
+        ? (chunk: Buffer) => {
+            const text = chunk.toString("utf-8");
+            const found = new Set<string>();
+            discoverLh3ImageUrls(text, found);
+            for (const url of found) {
+              if (seenStreamUrls.has(url)) continue;
+              seenStreamUrls.add(url);
+              const job = downloadSingleImage(requestConfig, url, outputDir, hooks).then((p) => {
+                if (p) {
+                  earlyDownloadedPaths.push(p);
+                  earlyDownloadedUrls.add(url);
+                }
+              });
+              earlyDownloadJobs.push(job);
+            }
+          }
+        : undefined;
+
       const rawBuffer = await readStreamWithTimeouts(
         body,
         idleTimeout,
         maxTimeout,
         (idleMs) => console.log(`[*] Stream idle for ${idleMs}ms, finalizing partial response.`),
         (maxMs) => console.log(`[*] Stream max duration ${maxMs}ms reached, finalizing.`),
+        onStreamChunk,
       );
       const raw = rawBuffer.toString("utf-8");
+
+      if (isSessionExpiredResponse(raw)) {
+        return fail(
+          new Error(
+            "Session expired — Gemini returned a login page. Re-login to gemini.google.com and re-export cookies.",
+          ),
+        );
+      }
+
+      if (earlyDownloadJobs.length > 0) {
+        await Promise.allSettled(earlyDownloadJobs);
+      }
 
       if (statusCode !== 200) {
         return fail(new Error(`Non-200 response (${statusCode}): ${raw.slice(0, 1500)}`));
@@ -135,18 +187,18 @@ export function createClient(
       }
       await hooks?.onCandidates?.(extracted.candidates as CandidateScore[]);
 
-      // Download images (and optionally upload to ImgBB) while rd-gg URLs are still fresh
-      const outputDir = options.imageOutputDir ?? "./output-images";
-      const { savedPaths, uploadedUrls } =
-        (saveImages || wantsUpload) && resolvedImageUrls.length > 0
+      const remainingUrls = resolvedImageUrls.filter((u) => !earlyDownloadedUrls.has(u));
+      const { savedPaths: lateSavedPaths, uploadedUrls } =
+        (saveImages || wantsUpload) && remainingUrls.length > 0
           ? await downloadImages(
               requestConfig,
-              resolvedImageUrls,
+              remainingUrls,
               outputDir,
               { saveFiles: saveImages, uploadToImgBB: wantsUpload },
               hooks,
             )
           : { savedPaths: [], uploadedUrls: [] };
+      const savedPaths = [...earlyDownloadedPaths, ...lateSavedPaths];
 
       return ok({
         text: extracted.text,
@@ -178,20 +230,65 @@ export function createClient(
     keepaliveTimer = setInterval(() => {
       const kaConfig: GemaiConfig = {
         ...cfg,
+        auth: effectiveAuth(),
         conversation: {},
         context: {
           ...cfg.context,
           reqId: String(Math.floor(1_000_000 + Math.random() * 9_000_000)),
         },
       };
-      void runBatchexecuteKeepalive(kaConfig).catch(() => undefined);
+      void runBatchexecuteKeepalive(kaConfig).catch((err) => {
+        if (process.env.DEBUG) console.debug("[keepalive] batchexecute error:", err.message);
+      });
     }, intervalMs);
+
+    const rotateEnabled = (process.env.KEEPALIVE_ROTATE_ENABLED ?? "1") !== "0";
+    if (rotateEnabled) {
+      const rotateIntervalMinutes = (() => {
+        const raw = process.env.KEEPALIVE_ROTATE_INTERVAL_MINUTES;
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 8;
+      })();
+      const rotateIntervalMs = rotateIntervalMinutes * 60_000;
+
+      rotateTimer = setInterval(() => {
+        const kaConfig: GemaiConfig = {
+          ...cfg,
+          auth: effectiveAuth(),
+          conversation: {},
+          context: {
+            ...cfg.context,
+            reqId: String(Math.floor(1_000_000 + Math.random() * 9_000_000)),
+          },
+        };
+        void rotateCookies(kaConfig).then((result) => {
+          if (result.ok) {
+            authOverride = { ...authOverride, cookies: result.value.cookies };
+          } else {
+            const isSessionExpired = result.error.message.includes("Session expired");
+            if (isSessionExpired) {
+              console.error(
+                `[keepalive] FATAL: Session expired, re-login needed — ${result.error.message}`,
+              );
+              stopKeepalive();
+            }
+            // Transient errors: log and continue — next batchexecute cycle
+            // will still run.
+          }
+        });
+      }, rotateIntervalMs);
+    }
   };
 
   const stopKeepalive = (): void => {
-    if (!keepaliveTimer) return;
-    clearInterval(keepaliveTimer);
-    keepaliveTimer = null;
+    if (keepaliveTimer) {
+      clearInterval(keepaliveTimer);
+      keepaliveTimer = null;
+    }
+    if (rotateTimer) {
+      clearInterval(rotateTimer);
+      rotateTimer = null;
+    }
   };
 
   startKeepalive();

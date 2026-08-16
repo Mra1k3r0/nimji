@@ -8,7 +8,7 @@ import { writeFile, mkdir, rm, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { createSessionStore } from "../src/session.js";
+import { createSessionStore, parseEncKey, encryptCookies, decryptCookies } from "../src/session.js";
 
 let tmpDir: string;
 let sessionFile: string;
@@ -64,8 +64,8 @@ describe("createSessionStore — load", () => {
   });
 
   it("returns empty state when file exceeds size cap", async () => {
-    // Write > 64 KiB
-    const bigJson = JSON.stringify({ conversationId: "c_" + "x".repeat(70_000) });
+    // Write > 128 KiB (must exceed MAX_SESSION_FILE_BYTES = 128 * 1024)
+    const bigJson = JSON.stringify({ conversationId: "c_" + "x".repeat(140_000) });
     await writeFile(sessionFile, bigJson, "utf8");
     const store = createSessionStore(sessionFile);
     const state = await store.load();
@@ -168,5 +168,234 @@ describe("createSessionStore — path property", () => {
   it("exposes the resolved file path", () => {
     const store = createSessionStore(sessionFile);
     assert.equal(store.path, sessionFile);
+  });
+});
+
+describe("createSessionStore — loadRotatedCookies", () => {
+  it("returns null when no rotated cookies exist", async () => {
+    const store = createSessionStore(sessionFile);
+    const result = await store.loadRotatedCookies();
+    assert.equal(result, null);
+  });
+
+  it("returns null for non-existent file", async () => {
+    const nonExistent = path.join(tmpDir, "nope.json");
+    const store = createSessionStore(nonExistent);
+    const result = await store.loadRotatedCookies();
+    assert.equal(result, null);
+  });
+
+  it("loads rotated cookies and rotatedAt from file", async () => {
+    const data = {
+      conversationId: "c_test",
+      rotatedCookies: "SID=new; HSID=new2",
+      rotatedAt: 1700000000000,
+    };
+    await writeFile(sessionFile, JSON.stringify(data), "utf8");
+    const store = createSessionStore(sessionFile);
+    const result = await store.loadRotatedCookies();
+    assert.deepEqual(result, {
+      cookies: "SID=new; HSID=new2",
+      rotatedAt: 1700000000000,
+    });
+  });
+
+  it("returns null when rotatedCookies field is missing", async () => {
+    const data = { conversationId: "c_no_cookies" };
+    await writeFile(sessionFile, JSON.stringify(data), "utf8");
+    const store = createSessionStore(sessionFile);
+    const result = await store.loadRotatedCookies();
+    assert.equal(result, null);
+  });
+});
+
+describe("createSessionStore — saveRotatedCookies", () => {
+  it("saves rotated cookies to a new file", async () => {
+    const store = createSessionStore(sessionFile);
+    await store.saveRotatedCookies("SID=fresh; HSID=fresh2", 1700000000000);
+    const raw = await readFile(sessionFile, "utf8");
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.rotatedCookies, "SID=fresh; HSID=fresh2");
+    assert.equal(parsed.rotatedAt, 1700000000000);
+  });
+
+  it("merges with existing conversation state", async () => {
+    const store = createSessionStore(sessionFile);
+    await store.save({ conversationId: "c_existing", responseId: "r_1" });
+    await store.saveRotatedCookies("SID=fresh", 1700000000000);
+    const raw = await readFile(sessionFile, "utf8");
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.conversationId, "c_existing");
+    assert.equal(parsed.responseId, "r_1");
+    assert.equal(parsed.rotatedCookies, "SID=fresh");
+    assert.equal(parsed.rotatedAt, 1700000000000);
+  });
+
+  it("round-trips through saveRotatedCookies → loadRotatedCookies", async () => {
+    const store = createSessionStore(sessionFile);
+    await store.saveRotatedCookies("SID=rt; HSID=rt2", 1700000000000);
+    const loaded = await store.loadRotatedCookies();
+    assert.deepEqual(loaded, {
+      cookies: "SID=rt; HSID=rt2",
+      rotatedAt: 1700000000000,
+    });
+  });
+
+  it("overwrites previous rotated cookies", async () => {
+    const store = createSessionStore(sessionFile);
+    await store.saveRotatedCookies("SID=old", 1700000000000);
+    await store.saveRotatedCookies("SID=new", 1700000001000);
+    const loaded = await store.loadRotatedCookies();
+    assert.equal(loaded?.cookies, "SID=new");
+    assert.equal(loaded?.rotatedAt, 1700000001000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseEncKey
+// ---------------------------------------------------------------------------
+
+describe("parseEncKey", () => {
+  it("returns null for undefined", () => {
+    assert.equal(parseEncKey(undefined), null);
+  });
+
+  it("returns null for empty string", () => {
+    assert.equal(parseEncKey(""), null);
+  });
+
+  it("returns null for whitespace-only string", () => {
+    assert.equal(parseEncKey("   "), null);
+  });
+
+  it("returns a 32-byte buffer for any non-empty string", () => {
+    const buf = parseEncKey("my-secret-passphrase");
+    assert.ok(buf);
+    assert.equal(buf.length, 32);
+  });
+
+  it("derives deterministic key from same input", () => {
+    const a = parseEncKey("same-input");
+    const b = parseEncKey("same-input");
+    assert.ok(a && b);
+    assert.deepEqual(a, b);
+  });
+
+  it("derives different keys from different inputs", () => {
+    const a = parseEncKey("key-one");
+    const b = parseEncKey("key-two");
+    assert.ok(a && b);
+    assert.notDeepEqual(a, b);
+  });
+
+  it("handles special characters and unicode", () => {
+    const buf = parseEncKey("p@$$w0rd! 日本語 🔑");
+    assert.ok(buf);
+    assert.equal(buf.length, 32);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// encryptCookies / decryptCookies round-trip
+// ---------------------------------------------------------------------------
+
+describe("encryptCookies / decryptCookies", () => {
+  const key = Buffer.alloc(32, 0x42); // deterministic test key
+
+  it("round-trips plaintext through encrypt → decrypt", () => {
+    const plaintext = "SID=abc; HSID=def123";
+    const encrypted = encryptCookies(plaintext, key);
+    assert.notEqual(encrypted, plaintext);
+    const decrypted = decryptCookies(encrypted, key);
+    assert.equal(decrypted, plaintext);
+  });
+
+  it("returns different ciphertext each time (random IV)", () => {
+    const plaintext = "SID=same";
+    const a = encryptCookies(plaintext, key);
+    const b = encryptCookies(plaintext, key);
+    assert.notEqual(a, b);
+    assert.equal(decryptCookies(a, key), plaintext);
+    assert.equal(decryptCookies(b, key), plaintext);
+  });
+
+  it("returns null when decrypting with wrong key", () => {
+    const wrongKey = Buffer.alloc(32, 0x99);
+    const encrypted = encryptCookies("secret", key);
+    assert.equal(decryptCookies(encrypted, wrongKey), null);
+  });
+
+  it("returns null for tampered ciphertext", () => {
+    const encrypted = encryptCookies("data", key);
+    const buf = Buffer.from(encrypted, "base64");
+    buf[buf.length - 1] ^= 0xff; // flip last byte
+    assert.equal(decryptCookies(buf.toString("base64"), key), null);
+  });
+
+  it("returns null for garbage base64", () => {
+    assert.equal(decryptCookies("not-valid-base64!!!", key), null);
+  });
+
+  it("returns null for too-short base64", () => {
+    assert.equal(decryptCookies(Buffer.alloc(10).toString("base64"), key), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Session store integration with encryption
+// ---------------------------------------------------------------------------
+
+describe("createSessionStore — encrypted rotated cookies", () => {
+  beforeEach(async () => {
+    process.env.ENC_KEY = "test-secret-key-123";
+  });
+
+  afterEach(() => {
+    delete process.env.ENC_KEY;
+  });
+
+  it("stores encrypted data in file, decrypts on load", async () => {
+    const store = createSessionStore(sessionFile);
+    await store.saveRotatedCookies("SID=enc_test", 1700000000000);
+
+    // Raw file should NOT contain plaintext
+    const raw = await readFile(sessionFile, "utf8");
+    assert.ok(!raw.includes("SID=enc_test"));
+
+    // loadRotatedCookies should decrypt
+    const loaded = await store.loadRotatedCookies();
+    assert.equal(loaded?.cookies, "SID=enc_test");
+    assert.equal(loaded?.rotatedAt, 1700000000000);
+  });
+
+  it("falls back to plaintext when ENC_KEY is not set", async () => {
+    delete process.env.ENC_KEY;
+    const store = createSessionStore(sessionFile);
+    await store.saveRotatedCookies("SID=plain", 1700000000000);
+
+    const raw = await readFile(sessionFile, "utf8");
+    assert.ok(raw.includes("SID=plain"));
+  });
+
+  it("falls back to plaintext when ENC_KEY is empty", async () => {
+    process.env.ENC_KEY = "   ";
+    const store = createSessionStore(sessionFile);
+    await store.saveRotatedCookies("SID=empty_key", 1700000000000);
+
+    const raw = await readFile(sessionFile, "utf8");
+    assert.ok(raw.includes("SID=empty_key"));
+  });
+
+  it("merges encrypted cookies with existing conversation state", async () => {
+    const store = createSessionStore(sessionFile);
+    await store.save({ conversationId: "c_keep" });
+    await store.saveRotatedCookies("SID=merged", 1700000000000);
+
+    const raw = await readFile(sessionFile, "utf8");
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.conversationId, "c_keep");
+
+    const loaded = await store.loadRotatedCookies();
+    assert.equal(loaded?.cookies, "SID=merged");
   });
 });

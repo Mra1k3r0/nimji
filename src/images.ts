@@ -1,14 +1,106 @@
-import { fetch } from "undici";
+import { Impit, type HttpMethod } from "impit";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildSecChUaHeaders } from "./transport.js";
 import type { GemaiConfig, GemaiHooks, ImageAttachment } from "./types.js";
 
-/**
- * Strip patterns that look like session cookies, auth tokens, or SID values from an HTTP
- * error body before the message is surfaced in thrown errors or CLI output.
- * Matches: `key=<base64/alphanum value>` pairs and bare long base64-ish strings (≥ 32 chars).
- */
+/** minimal response shape we actually use from both impit + undici */
+interface LiteResponse {
+  status: number;
+  ok: boolean;
+  headers: Headers;
+  text(): Promise<string>;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+/** Singleton impit instance that impersonates Chrome's TLS fingerprint (JA3/JA4). */
+let _impit: Impit | null = null;
+function getImpit(): Impit {
+  if (!_impit) _impit = new Impit({ browser: "chrome" });
+  return _impit;
+}
+
+/** Returns true when the URL targets Google's protected CDN that checks TLS fingerprints. */
+function isProtectedCdn(url: string): boolean {
+  return url.includes("googleusercontent.com") || url.includes("gg-dl/");
+}
+
+/** chases the 3-hop gg-dl → fife → lh3 text/plain chain to get the image url */
+async function followRedirectChain(config: GemaiConfig, url: string): Promise<string> {
+  if (!url.includes("googleusercontent.com") && !url.includes("fife.usercontent.google.com"))
+    return url;
+  if (!url.includes("/gg-dl/") && !url.includes("/rd-gg-dl/")) return url;
+
+  // suffix goes on initial gg-dl url, not the resolved one
+  let current = url;
+  if (current.includes("/gg-dl/") && !current.includes("=s")) {
+    current += "=s0?alr=yes"; // =s0 is full res, ?alr=yes is mandatory
+  }
+
+  const profile = buildHeaderProfiles(config)[0];
+
+  for (let hop = 0; hop < 5; hop++) {
+    try {
+      const res = await smartFetch(current, {
+        method: "GET",
+        redirect: "manual",
+        headers: profile?.headers ?? {},
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        if (!loc) break;
+        current = new URL(loc, current).href;
+        continue;
+      }
+
+      const ct = String(res.headers.get("content-type") ?? "").toLowerCase();
+
+      if (ct.startsWith("image/")) {
+        return current;
+      }
+
+      if (ct.includes("text/")) {
+        const body = (await res.text?.()) ?? (await res.arrayBuffer?.())?.toString?.() ?? "";
+        const nextUrl = body.trim();
+        if (!nextUrl.startsWith("http")) break;
+        current = nextUrl;
+        continue;
+      }
+
+      break;
+    } catch {
+      break;
+    }
+  }
+
+  return current;
+}
+
+/** fetch with auto impit for google cdn urls */
+async function smartFetch(
+  url: string,
+  init: RequestInit & { signal?: AbortSignal },
+): Promise<LiteResponse> {
+  if (isProtectedCdn(url)) {
+    const impit = getImpit();
+    const headers = Object.fromEntries(new Headers(init.headers as HeadersInit).entries());
+    const res = await impit.fetch(url, {
+      method: (init.method ?? "GET") as HttpMethod,
+      headers,
+      signal: init.signal,
+      redirect: (init.redirect as "follow" | "manual" | "error") ?? "follow",
+    });
+    return res;
+  }
+  return fetch(url, {
+    ...init,
+    redirect: init.redirect as RequestRedirect | undefined,
+  }) as Promise<LiteResponse>;
+}
+
+/** scrubs tokens/cookies from error bodies */
 export function redactErrorBody(raw: string, maxLen = 300): string {
   return raw
     .slice(0, maxLen * 4) // work on a reasonable prefix before regex
@@ -20,14 +112,8 @@ export function redactErrorBody(raw: string, maxLen = 300): string {
     .slice(0, maxLen);
 }
 
-/**
- * When `true`, skips lh3 redirect chasing / downloads / ImgBB while still surfacing URLs from streams.
- * Set env `IMAGE_PIPELINE_ENABLED=1` to enable, or flip the default here once your session is confirmed.
- */
+/** when true, skips image downloads while still surfacing urls from streams */
 export const IMAGE_PIPELINE_DISABLED = process.env.IMAGE_PIPELINE_ENABLED !== "1";
-
-const GOOGLEBOT_IMAGE_UA =
-  "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
 
 const MAX_IMAGE_DOWNLOAD_BYTES = 40 * 1024 * 1024;
 
@@ -45,45 +131,6 @@ function inferExt(contentType: string): string {
     if (contentType.includes(key)) return value;
   }
   return "bin";
-}
-
-function buildCandidates(originalUrl: string): string[] {
-  const out: string[] = [];
-  const addUnique = (u: string) => {
-    if (!out.includes(u)) out.push(u);
-  };
-  const addAlr = (value: string): string => {
-    try {
-      const parsed = new URL(value);
-      if (!parsed.searchParams.has("alr")) parsed.searchParams.set("alr", "yes");
-      return parsed.toString();
-    } catch {
-      return value;
-    }
-  };
-  const addSizeVariant = (value: string, suffix: string): string => {
-    try {
-      const parsed = new URL(value);
-      const basePath = parsed.pathname;
-      if (basePath.includes("=")) return value;
-      parsed.pathname = `${basePath}${suffix}`;
-      return parsed.toString();
-    } catch {
-      return value;
-    }
-  };
-
-  const seeds = [originalUrl];
-  for (const seed of seeds) {
-    const withAlr = addAlr(seed);
-    addUnique(seed);
-    addUnique(withAlr);
-    addUnique(addSizeVariant(seed, "=s1024-rj"));
-    addUnique(addSizeVariant(withAlr, "=s1024-rj"));
-    addUnique(addSizeVariant(seed, "=s2048-rj"));
-    addUnique(addSizeVariant(withAlr, "=s2048-rj"));
-  }
-  return out;
 }
 
 async function mapLimit<T, R>(
@@ -139,43 +186,26 @@ async function uploadToImgBB(
 function buildHeaderProfiles(
   config: GemaiConfig,
 ): Array<{ name: string; headers: Record<string, string> }> {
+  // cdn needs cookies + tls fingerprint
   return [
     {
-      name: "googlebot-with-cookie",
+      name: "browser-with-cookies",
       headers: {
-        accept: "*/*",
+        accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         "accept-language": config.context.acceptLanguage,
         cookie: config.auth.cookies,
-        referer: "https://www.google.com/",
-        "user-agent": GOOGLEBOT_IMAGE_UA,
-      },
-    },
-    {
-      name: "browser-with-cookie",
-      headers: {
-        accept: "*/*",
-        "accept-language": config.context.acceptLanguage,
-        cookie: config.auth.cookies,
-        origin: "https://gemini.google.com",
-        priority: "u=1, i",
         referer: "https://gemini.google.com/",
         ...buildSecChUaHeaders(config),
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "image",
+        "sec-fetch-mode": "no-cors",
         "sec-fetch-site": "cross-site",
-        "sec-fetch-storage-access": "active",
         "user-agent": config.context.userAgent,
-        "x-browser-channel": config.context.browserChannel,
-        "x-browser-copyright": config.context.browserCopyright,
-        "x-browser-validation": config.context.browserValidation,
-        "x-browser-year": "2026",
-        "x-client-data": config.context.clientData,
       },
     },
   ];
 }
 
-async function drainResponseBody(res: Awaited<ReturnType<typeof fetch>>): Promise<void> {
+async function drainResponseBody(res: LiteResponse): Promise<void> {
   try {
     await res.arrayBuffer();
   } catch {
@@ -183,57 +213,17 @@ async function drainResponseBody(res: Awaited<ReturnType<typeof fetch>>): Promis
   }
 }
 
-async function followGgDlRedirectChain(
-  url: string,
-  headers: Record<string, string>,
-): Promise<string> {
-  let current = url;
-  for (let hop = 0; hop < 15; hop++) {
-    const res = await fetch(current, {
-      method: "GET",
-      redirect: "manual",
-      headers,
-    });
-
-    if (res.status >= 300 && res.status < 400) {
-      const loc = res.headers.get("location");
-      await drainResponseBody(res);
-      if (!loc) return url;
-      current = new URL(loc, current).href;
-      if (current.includes("/rd-gg/")) return current;
-      continue;
-    }
-    await drainResponseBody(res);
-    return url;
-  }
-  return url;
-}
-
-/** Walks `gg-dl` redirects until a stable `rd-gg` URL appears (session-dependent). */
+/** resolves gg-dl urls through the redirect chain */
 export async function upgradeGgDlUrlsFromRedirects(
   config: GemaiConfig,
   urls: readonly string[],
 ): Promise<string[]> {
-  if (IMAGE_PIPELINE_DISABLED) return [...urls];
+  if (process.env.IMAGE_PIPELINE_ENABLED !== "1") return [...urls];
 
-  const profiles = buildHeaderProfiles(config);
-  return Promise.all(
-    urls.map(async (url) => {
-      if (!url.includes("/gg-dl/")) return url;
-      try {
-        for (const profile of profiles) {
-          const upgraded = await followGgDlRedirectChain(url, profile.headers);
-          if (upgraded.includes("/rd-gg/")) return upgraded;
-        }
-        return url;
-      } catch {
-        return url;
-      }
-    }),
-  );
+  return Promise.all(urls.map((url) => followRedirectChain(config, url)));
 }
 
-/** Attempts concurrent lh3 downloads + optional disk persistence / ImgBB mirror. */
+/** downloads images concurrently with optional disk save + imgbb upload */
 export async function downloadImages(
   config: GemaiConfig,
   urls: readonly string[],
@@ -241,7 +231,7 @@ export async function downloadImages(
   options?: { saveFiles?: boolean; uploadToImgBB?: boolean },
   hooks?: GemaiHooks,
 ): Promise<{ savedPaths: string[]; uploadedUrls: string[] }> {
-  if (IMAGE_PIPELINE_DISABLED) return { savedPaths: [], uploadedUrls: [] };
+  if (process.env.IMAGE_PIPELINE_ENABLED !== "1") return { savedPaths: [], uploadedUrls: [] };
 
   const saveFiles = options?.saveFiles ?? true;
   const uploadToImgBBEnabled = options?.uploadToImgBB ?? false;
@@ -252,86 +242,138 @@ export async function downloadImages(
   if (saveFiles) {
     await mkdir(outputDir, { recursive: true });
   }
-  const headerProfiles = buildHeaderProfiles(config);
+  const profile = buildHeaderProfiles(config)[0];
+  if (!profile) return { savedPaths: [], uploadedUrls: [] };
 
   const perUrl = await mapLimit([...urls], 4, async (url) => {
-    const candidates = buildCandidates(url);
+    hooks?.onImageDownloadAttempt?.(url);
+    try {
+      // resolve through redirect chain (=s0 suffix applied inside)
+      const fullResUrl = await followRedirectChain(config, url);
+      let res = await smartFetch(fullResUrl, {
+        method: "GET",
+        redirect: "follow",
+        headers: profile.headers,
+        signal: AbortSignal.timeout(20_000),
+      });
 
-    for (const candidateUrl of candidates) {
-      for (const profile of headerProfiles) {
-        hooks?.onImageDownloadAttempt?.(candidateUrl);
-        try {
-          const res = await fetch(candidateUrl, {
-            method: "GET",
-            redirect: "follow",
-            headers: profile.headers,
-          });
+      if (res.status === 429 || res.status === 503) {
+        await drainResponseBody(res);
+        await new Promise((r) => setTimeout(r, 2_000));
+        res = await smartFetch(fullResUrl, {
+          method: "GET",
+          redirect: "follow",
+          headers: profile.headers,
+          signal: AbortSignal.timeout(20_000),
+        });
+      }
 
-          if (!res.ok) {
-            hooks?.onImageDownloadSkip?.(`${profile.name}: status ${res.status}`, candidateUrl);
-            continue;
-          }
+      if (!res.ok) {
+        hooks?.onImageDownloadSkip?.(`status ${res.status}`, url);
+        return null;
+      }
 
-          const contentType = String(res.headers.get("content-type") ?? "").toLowerCase();
-          if (!contentType.startsWith("image/")) {
-            hooks?.onImageDownloadSkip?.(
-              `${profile.name}: content-type ${contentType || "unknown"}`,
-              candidateUrl,
-            );
-            continue;
-          }
+      const contentType = String(res.headers.get("content-type") ?? "").toLowerCase();
+      if (!contentType.startsWith("image/")) {
+        hooks?.onImageDownloadSkip?.(`content-type ${contentType || "unknown"}`, url);
+        return null;
+      }
 
-          const contentLen = res.headers.get("content-length");
-          if (contentLen) {
-            const n = Number(contentLen);
-            if (Number.isFinite(n) && n > MAX_IMAGE_DOWNLOAD_BYTES) {
-              hooks?.onImageDownloadSkip?.(
-                `${profile.name}: content-length ${n} exceeds cap`,
-                candidateUrl,
-              );
-              continue;
-            }
-          }
-
-          const bytes = await res.arrayBuffer();
-          if (bytes.byteLength > MAX_IMAGE_DOWNLOAD_BYTES) {
-            hooks?.onImageDownloadSkip?.(
-              `${profile.name}: body ${bytes.byteLength} exceeds cap`,
-              candidateUrl,
-            );
-            continue;
-          }
-          const ext = inferExt(contentType);
-          const fileName = `image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-          const filePath = path.join(outputDir, fileName);
-          const buffer = Buffer.from(bytes);
-          if (saveFiles) {
-            await writeFile(filePath, buffer);
-          }
-
-          let uploadedUrl: string | null = null;
-          if (uploadToImgBBEnabled && imgbbApiKey) {
-            try {
-              uploadedUrl = await uploadToImgBB(imgbbApiKey, buffer, fileName, imgbbExpiration);
-            } catch {
-              hooks?.onImageDownloadSkip?.("imgbb upload failed", candidateUrl);
-            }
-          }
-
-          return { savedPath: saveFiles ? filePath : null, uploadedUrl };
-        } catch {
-          hooks?.onImageDownloadSkip?.(`${profile.name}: network error`, candidateUrl);
+      const contentLen = res.headers.get("content-length");
+      if (contentLen) {
+        const n = Number(contentLen);
+        if (Number.isFinite(n) && n > MAX_IMAGE_DOWNLOAD_BYTES) {
+          hooks?.onImageDownloadSkip?.(`content-length ${n} exceeds cap`, url);
+          return null;
         }
       }
-    }
 
-    return null;
+      const bytes = await res.arrayBuffer();
+      if (bytes.byteLength > MAX_IMAGE_DOWNLOAD_BYTES) {
+        hooks?.onImageDownloadSkip?.(`body ${bytes.byteLength} exceeds cap`, url);
+        return null;
+      }
+      const ext = inferExt(contentType);
+      const fileName = `image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const filePath = path.join(outputDir, fileName);
+      const buffer = Buffer.from(bytes);
+      if (saveFiles) {
+        await writeFile(filePath, buffer);
+      }
+
+      let uploadedUrl: string | null = null;
+      if (uploadToImgBBEnabled && imgbbApiKey) {
+        try {
+          uploadedUrl = await uploadToImgBB(imgbbApiKey, buffer, fileName, imgbbExpiration);
+        } catch {
+          hooks?.onImageDownloadSkip?.("imgbb upload failed", url);
+        }
+      }
+
+      return { savedPath: saveFiles ? filePath : null, uploadedUrl };
+    } catch {
+      hooks?.onImageDownloadSkip?.("network error", url);
+      return null;
+    }
   });
 
   return {
     savedPaths: perUrl.flatMap((item) => (item?.savedPath ? [item.savedPath] : [])),
     uploadedUrls: perUrl.flatMap((item) => (item?.uploadedUrl ? [item.uploadedUrl] : [])),
   };
+}
+
+/** downloads a single image — used for mid-stream where tokens expire fast */
+export async function downloadSingleImage(
+  config: GemaiConfig,
+  url: string,
+  outputDir: string,
+  hooks?: GemaiHooks,
+): Promise<string | null> {
+  if (process.env.IMAGE_PIPELINE_ENABLED !== "1") return null;
+
+  await mkdir(outputDir, { recursive: true });
+  const profile = buildHeaderProfiles(config)[0];
+  if (!profile) return null;
+
+  hooks?.onImageDownloadAttempt?.(url);
+  try {
+    // resolve through redirect chain
+    const fullResUrl = await followRedirectChain(config, url);
+    let res = await smartFetch(fullResUrl, {
+      method: "GET",
+      redirect: "follow",
+      headers: profile.headers,
+      signal: AbortSignal.timeout(20_000),
+    });
+
+    if (res.status === 429 || res.status === 503) {
+      await drainResponseBody(res);
+      await new Promise((r) => setTimeout(r, 2_000));
+      res = await smartFetch(fullResUrl, {
+        method: "GET",
+        redirect: "follow",
+        headers: profile.headers,
+        signal: AbortSignal.timeout(20_000),
+      });
+    }
+
+    if (!res.ok) return null;
+
+    const contentType = String(res.headers.get("content-type") ?? "").toLowerCase();
+    if (!contentType.startsWith("image/")) return null;
+
+    const bytes = await res.arrayBuffer();
+    if (bytes.byteLength > MAX_IMAGE_DOWNLOAD_BYTES) return null;
+
+    const ext = inferExt(contentType);
+    const fileName = `image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const filePath = path.join(outputDir, fileName);
+    await writeFile(filePath, Buffer.from(bytes));
+    return filePath;
+  } catch {
+    return null;
+  }
 }
 
 const KNOWN_MIME_TYPES: Readonly<Record<string, string>> = {
@@ -373,7 +415,6 @@ export async function uploadImageToGemini(
   const fileBytes = await readFile(filePath);
   const fileSize = fileBytes.length;
 
-  // Shared headers matching the real browser upload traffic to push.clients6.google.com
   const baseHeaders: Record<string, string> = {
     accept: "*/*",
     "accept-language": config.context.acceptLanguage,
@@ -395,8 +436,7 @@ export async function uploadImageToGemini(
     "x-tenant-id": "bard-storage",
   };
 
-  // Step 1 — POST to push.clients6.google.com/upload/ with x-goog-upload-command: start
-  // The server returns an x-goog-upload-url header containing the upload_id for step 2.
+  // step 1: start resumable upload
   const startUrl = "https://push.clients6.google.com/upload/?upload_protocol=resumable";
   const startRes = await fetch(startUrl, {
     method: "POST",
@@ -415,7 +455,7 @@ export async function uploadImageToGemini(
     throw new Error(`Gemini upload start failed (${startRes.status}): ${redactErrorBody(body)}`);
   }
 
-  // The server echoes back the full upload URL including server-assigned upload_id
+  // server returns upload url for step 2
   const uploadUrl = startRes.headers.get("x-goog-upload-url");
   await startRes.arrayBuffer(); // drain body
 
@@ -423,7 +463,7 @@ export async function uploadImageToGemini(
     throw new Error("Gemini upload start did not return x-goog-upload-url");
   }
 
-  // Step 2 — POST raw bytes to the server-provided upload URL
+  // step 2: upload the actual bytes
   const finalRes = await fetch(uploadUrl, {
     method: "POST",
     headers: {
@@ -443,7 +483,7 @@ export async function uploadImageToGemini(
     );
   }
 
-  // The response contains a token path of the form /contrib_service/ttl_1d/<token>
+  // extract contrib token from response
   const tokenMatch = /\/contrib_service\/ttl_\d+[dhms]?\/([A-Za-z0-9_-]+)/.exec(finalBody);
   if (!tokenMatch) {
     throw new Error(

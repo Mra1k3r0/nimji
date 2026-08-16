@@ -117,7 +117,7 @@ function trimTrailingJsonCruft(url: string): string {
   return url.replace(/[.,;)\]}\s\\]+$/g, "");
 }
 
-function discoverLh3ImageUrls(blob: string, out: Set<string>): void {
+export function discoverLh3ImageUrls(blob: string, out: Set<string>): void {
   const s = normalizeForLh3UrlScan(blob);
   LH3_IMAGE_PATH_RE.lastIndex = 0;
   let m: RegExpExecArray | null;

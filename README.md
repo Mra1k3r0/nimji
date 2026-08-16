@@ -317,24 +317,25 @@ Keys use the same names as environment variables. See [`config.jsonc`](config.js
 
 ### Optional
 
-| Variable                 | Default          | Description                                       |
-| ------------------------ | ---------------- | ------------------------------------------------- |
-| `MODEL`                  | `auto`           | `auto` or a full `boq_assistant-…` build string   |
-| `BL_PARAM`               | —                | Overrides `MODEL` when set; direct `bl=` value    |
-| `USER_AGENT`             | Chrome UA        | Custom `User-Agent` header                        |
-| `LANGUAGE`               | `en`             | Gemini request language                           |
-| `ACCEPT_LANGUAGE`        | `en-US,en;q=0.9` | `Accept-Language` header                          |
-| `CHROME_FULL_VERSION`    | `147.0.7727.56`  | Chrome version for client-hint headers            |
-| `IMAGE_PIPELINE_ENABLED` | —                | Set to `1` to enable image download/save/upload   |
-| `IMG_BB_API_KEY`         | —                | ImgBB API key for `--upload`                      |
-| `IMG_BB_EXPIRATION_SEC`  | `0` (permanent)  | ImgBB link TTL                                    |
-| `NIMJI_HOME`             | `~/.nimji`       | Override the persistent state directory           |
-| `NIMJI_CONFIG`           | —                | Explicit config file path                         |
-| `UI_DENSITY`             | `comfortable`    | `compact` or `comfortable`                        |
-| `UI_ANSWER_STYLE`        | `boxed`          | `boxed` or `plain`                                |
-| `DEBUG_CANDIDATES`       | `0`              | Set to `1` to log raw text candidate scores       |
-| `NO_COLOR`               | —                | Set to `1` to disable ANSI color output           |
-| `FORCE_COLOR`            | —                | Set to `1` to force color in non-TTY environments |
+| Variable                 | Default          | Description                                         |
+| ------------------------ | ---------------- | --------------------------------------------------- |
+| `MODEL`                  | `auto`           | `auto` or a full `boq_assistant-…` build string     |
+| `BL_PARAM`               | —                | Overrides `MODEL` when set; direct `bl=` value      |
+| `USER_AGENT`             | Chrome UA        | Custom `User-Agent` header                          |
+| `LANGUAGE`               | `en`             | Gemini request language                             |
+| `ACCEPT_LANGUAGE`        | `en-US,en;q=0.9` | `Accept-Language` header                            |
+| `CHROME_FULL_VERSION`    | `147.0.7727.56`  | Chrome version for client-hint headers              |
+| `IMAGE_PIPELINE_ENABLED` | —                | Set to `1` to enable image download/save/upload     |
+| `IMG_BB_API_KEY`         | —                | ImgBB API key for `--upload`                        |
+| `IMG_BB_EXPIRATION_SEC`  | `0` (permanent)  | ImgBB link TTL                                      |
+| `NIMJI_HOME`             | `~/.nimji`       | Override the persistent state directory             |
+| `NIMJI_CONFIG`           | —                | Explicit config file path                           |
+| `UI_DENSITY`             | `comfortable`    | `compact` or `comfortable`                          |
+| `UI_ANSWER_STYLE`        | `boxed`          | `boxed` or `plain`                                  |
+| `DEBUG_CANDIDATES`       | `0`              | Set to `1` to log raw text candidate scores         |
+| `NO_COLOR`               | —                | Set to `1` to disable ANSI color output             |
+| `FORCE_COLOR`            | —                | Set to `1` to force color in non-TTY environments   |
+| `ENC_KEY`                | —                | Passphrase to encrypt rotated cookies (AES-256-GCM) |
 
 ### Stream timeouts
 
@@ -390,6 +391,14 @@ nimji --chat --keep-alive --keepalive-minutes 5
 
 # Detached background daemon (one-shot mode)
 nimji --keepalive --keepalive-minutes 10 "hi"
+```
+
+**Cookie rotation** — nimji automatically rotates Google's freshness cookies (`__Secure-1PSIDTS`) via the internal `/RotateCookies` endpoint, extending your session indefinitely. The CLI rotates on startup; the daemon rotates every 8 minutes.
+
+**Encrypted cookie storage** — set `ENC_KEY` to any passphrase to encrypt rotated cookies at rest in `session.json` (AES-256-GCM):
+
+```bash
+ENC_KEY="my-secret-passphrase" nimji "hello"
 ```
 
 ---
