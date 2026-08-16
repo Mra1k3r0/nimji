@@ -14,6 +14,10 @@ import {
   parseStreamChunks,
   readStreamWithTimeouts,
   chromeMajorFromFullVersion,
+  parseCookies,
+  serializeCookies,
+  updateCookieString,
+  isSessionExpiredResponse,
 } from "../src/transport.js";
 import type { GemaiConfig } from "../src/types.js";
 
@@ -364,5 +368,155 @@ describe("readStreamWithTimeouts", () => {
       },
     );
     assert.ok(idleFired, "onIdle should have fired");
+  });
+});
+
+// ─── parseCookies ───────────────────────────────────────────────────────────
+
+describe("parseCookies", () => {
+  it("parses a single cookie", () => {
+    const map = parseCookies("SID=abc123");
+    assert.equal(map.get("SID"), "abc123");
+    assert.equal(map.size, 1);
+  });
+
+  it("parses multiple cookies separated by semicolons", () => {
+    const map = parseCookies("SID=abc; HSID=def; NID=ghi");
+    assert.equal(map.size, 3);
+    assert.equal(map.get("SID"), "abc");
+    assert.equal(map.get("HSID"), "def");
+    assert.equal(map.get("NID"), "ghi");
+  });
+
+  it("trims whitespace around names and values", () => {
+    const map = parseCookies(" SID = abc ; HSID = def ");
+    assert.equal(map.get("SID"), "abc");
+    assert.equal(map.get("HSID"), "def");
+  });
+
+  it("handles empty string", () => {
+    const map = parseCookies("");
+    assert.equal(map.size, 0);
+  });
+
+  it("handles cookies with = in value", () => {
+    const map = parseCookies("token=abc=def=ghi");
+    assert.equal(map.get("token"), "abc=def=ghi");
+  });
+
+  it("handles trailing semicolon", () => {
+    const map = parseCookies("SID=abc;");
+    assert.equal(map.get("SID"), "abc");
+    assert.equal(map.size, 1);
+  });
+
+  it("skips empty entries from double semicolons", () => {
+    const map = parseCookies("SID=abc;; HSID=def");
+    assert.equal(map.size, 2);
+    assert.equal(map.get("SID"), "abc");
+    assert.equal(map.get("HSID"), "def");
+  });
+});
+
+describe("serializeCookies", () => {
+  it("serializes a single entry", () => {
+    const map = new Map([["SID", "abc"]]);
+    assert.equal(serializeCookies(map), "SID=abc");
+  });
+
+  it("serializes multiple entries with semicolon+space", () => {
+    const map = new Map([
+      ["SID", "abc"],
+      ["HSID", "def"],
+    ]);
+    assert.equal(serializeCookies(map), "SID=abc; HSID=def");
+  });
+
+  it("returns empty string for empty map", () => {
+    assert.equal(serializeCookies(new Map()), "");
+  });
+
+  it("preserves insertion order", () => {
+    const map = new Map([
+      ["Z", "1"],
+      ["A", "2"],
+      ["M", "3"],
+    ]);
+    assert.equal(serializeCookies(map), "Z=1; A=2; M=3");
+  });
+});
+
+describe("updateCookieString", () => {
+  it("adds a new cookie to an existing string", () => {
+    const result = updateCookieString("SID=abc", new Map([["HSID", "def"]]));
+    assert.ok(result.includes("SID=abc"));
+    assert.ok(result.includes("HSID=def"));
+  });
+
+  it("replaces an existing cookie value", () => {
+    const result = updateCookieString("SID=old; HSID=def", new Map([["SID", "new"]]));
+    assert.ok(result.includes("SID=new"));
+    assert.ok(!result.includes("SID=old"));
+    assert.ok(result.includes("HSID=def"));
+  });
+
+  it("handles empty original string", () => {
+    const result = updateCookieString("", new Map([["SID", "abc"]]));
+    assert.equal(result, "SID=abc");
+  });
+
+  it("handles empty updates map", () => {
+    const result = updateCookieString("SID=abc", new Map());
+    assert.equal(result, "SID=abc");
+  });
+
+  it("updates multiple cookies at once", () => {
+    const result = updateCookieString(
+      "SID=old1; HSID=old2",
+      new Map([
+        ["SID", "new1"],
+        ["HSID", "new2"],
+      ]),
+    );
+    assert.ok(result.includes("SID=new1"));
+    assert.ok(result.includes("HSID=new2"));
+    assert.ok(!result.includes("old1"));
+    assert.ok(!result.includes("old2"));
+  });
+});
+
+describe("isSessionExpiredResponse", () => {
+  it("returns false for valid batchexecute response with )]}' prefix", () => {
+    assert.equal(isSessionExpiredResponse(")]}'[[1,2,3]"), false);
+  });
+
+  it("returns false for valid response starting with digit", () => {
+    assert.equal(isSessionExpiredResponse("42\nsome data"), false);
+  });
+
+  it("returns true for HTML DOCTYPE response", () => {
+    assert.equal(
+      isSessionExpiredResponse("<!DOCTYPE html><html><body>Sign in</body></html>"),
+      true,
+    );
+  });
+
+  it("returns true for html tag response", () => {
+    assert.equal(isSessionExpiredResponse("<html>login page</html>"), true);
+  });
+
+  it("returns true for accounts.google.com redirect", () => {
+    assert.equal(
+      isSessionExpiredResponse('window.location="https://accounts.google.com/ServiceLogin"'),
+      true,
+    );
+  });
+
+  it("returns false for empty string", () => {
+    assert.equal(isSessionExpiredResponse(""), false);
+  });
+
+  it("returns false for plain text", () => {
+    assert.equal(isSessionExpiredResponse("just some text"), false);
   });
 });

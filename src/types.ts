@@ -1,7 +1,6 @@
 /** Explicit success/error result (used across the library instead of throwing). */
 export type Result<T, E = Error> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: E };
+  { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: E };
 
 /** Mark a successful {@link Result}. */
 export const ok = <T>(value: T): Result<T, never> => ({ ok: true, value });
@@ -14,6 +13,8 @@ export type ConversationState = {
   readonly conversationId?: string;
   readonly responseId?: string;
   readonly choiceId?: string;
+  readonly rotatedCookies?: string;
+  readonly rotatedAt?: number;
 };
 
 /** Stream read timeouts and debug toggles (`STREAM_*`, `IMAGE_STREAM_*`, `DEBUG_CANDIDATES`). */
@@ -187,4 +188,6 @@ export type SessionStore = {
   readonly load: () => Promise<ConversationState>;
   readonly save: (state: ConversationState) => Promise<void>;
   readonly clear: () => Promise<void>;
+  readonly loadRotatedCookies: () => Promise<{ cookies: string; rotatedAt: number } | null>;
+  readonly saveRotatedCookies: (cookies: string, rotatedAt: number) => Promise<void>;
 };

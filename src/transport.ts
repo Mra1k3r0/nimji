@@ -28,12 +28,12 @@ export function buildSecChUaHeaders(config: GemaiConfig): Record<string, string>
   const plat = config.context.secChUaPlatform;
   const platVer = config.context.secChUaPlatformVersion;
   return {
-    "sec-ch-ua": `"Google Chrome";v="${major}", "Not.A/Brand";v="8", "Chromium";v="${major}"`,
+    "sec-ch-ua": `"Not=A?Brand";v="99", "Google Chrome";v="${major}", "Chromium";v="${major}"`,
     "sec-ch-ua-arch": '"x86"',
     "sec-ch-ua-bitness": '"64"',
     "sec-ch-ua-form-factors": '"Desktop"',
     "sec-ch-ua-full-version": `"${full}"`,
-    "sec-ch-ua-full-version-list": `"Google Chrome";v="${full}", "Not.A/Brand";v="8.0.0.0", "Chromium";v="${full}"`,
+    "sec-ch-ua-full-version-list": `"Not=A?Brand";v="99.0.0.0", "Google Chrome";v="${full}", "Chromium";v="${full}"`,
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-model": '""',
     "sec-ch-ua-platform": JSON.stringify(plat),
@@ -170,6 +170,15 @@ export async function runBatchexecuteKeepalive(
     );
     const raw = rawBuffer.toString("utf-8");
 
+    // Detect session expiry — HTML instead of JSON means cookies are stale
+    if (isSessionExpiredResponse(raw)) {
+      return fail(
+        new Error(
+          "Session expired — received HTML login page instead of JSON. Re-login to gemini.google.com and re-export cookies.",
+        ),
+      );
+    }
+
     if (statusCode !== 200) {
       return fail(new Error(`batchexecute keepalive failed (${statusCode}): ${raw.slice(0, 500)}`));
     }
@@ -241,7 +250,7 @@ export function buildPayload(
     config.context.requestBlob ?? null,
     config.context.requestHash ?? null,
     null,
-    [1],
+    [0], // slot 6: browser sends [0], not [1]
     1,
     null,
     null,
@@ -276,7 +285,7 @@ export function buildPayload(
     null,
     null,
     null,
-    [2],
+    [1], // slot 41: browser sends [1], not [2]
     null,
     null,
     null,
@@ -303,7 +312,7 @@ export function buildPayload(
     null,
     null,
     null,
-    2,
+    1, // slot 67: browser sends 1, not null
     null,
     null,
     null,
@@ -314,7 +323,24 @@ export function buildPayload(
     null,
     null,
     null,
+    6, // slot 78: browser sends 6, not null
     1,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    0, // slot 90
+    null,
+    null,
+    null,
+    null,
+    0, // slot 95
   ]);
 
   const outer = JSON.stringify([null, inner]);
@@ -351,6 +377,16 @@ export function parseStreamChunks(raw: string): unknown[] {
   return results;
 }
 
+/** checks if response body means cookies are cooked */
+export function isSessionExpiredResponse(body: string): boolean {
+  const trimmed = body.trimStart();
+  if (trimmed.startsWith(")]}'")) return false;
+  if (/^\d/.test(trimmed)) return false;
+  if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) return true;
+  if (trimmed.includes("accounts.google.com")) return true;
+  return false;
+}
+
 /** Consumes an Undici body with idle + wall-clock guards (partial streams allowed). */
 export async function readStreamWithTimeouts(
   body: AsyncIterable<Uint8Array>,
@@ -358,6 +394,7 @@ export async function readStreamWithTimeouts(
   maxDurationMs: number,
   onIdle?: (idleMs: number) => void,
   onMax?: (maxMs: number) => void,
+  onChunk?: (chunk: Buffer) => void,
 ): Promise<Buffer> {
   const chunks: Buffer[] = [];
   const iterator = body[Symbol.asyncIterator]();
@@ -392,7 +429,9 @@ export async function readStreamWithTimeouts(
       }
 
       if (result.done) break;
-      chunks.push(Buffer.isBuffer(result.value) ? result.value : Buffer.from(result.value));
+      const buf = Buffer.isBuffer(result.value) ? result.value : Buffer.from(result.value);
+      chunks.push(buf);
+      onChunk?.(buf);
 
       if (maxFired) {
         onMax?.(maxDurationMs);
@@ -406,4 +445,122 @@ export async function readStreamWithTimeouts(
   }
 
   return Buffer.concat(chunks);
+}
+
+/** parses "key=val; key2=val2" into a Map */
+export function parseCookies(raw: string): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!raw) return map;
+
+  for (const part of raw.split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+
+    const name = part.slice(0, eqIdx).trim();
+    if (!name) continue;
+
+    const value = part.slice(eqIdx + 1).trim();
+    map.set(name, value);
+  }
+
+  return map;
+}
+
+/** serializes Map back to cookie header string */
+export function serializeCookies(cookies: Map<string, string>): string {
+  const parts: string[] = [];
+  for (const [name, value] of cookies) {
+    parts.push(`${name}=${value}`);
+  }
+  return parts.join("; ");
+}
+
+/** merges cookie updates into existing string, replacing existing names */
+export function updateCookieString(original: string, updates: Map<string, string>): string {
+  const merged = parseCookies(original);
+  for (const [name, value] of updates) {
+    merged.set(name, value);
+  }
+  return serializeCookies(merged);
+}
+
+/** calls google's POST /RotateCookies to refresh __Secure-1PSIDTS. rate limit: 60s */
+export async function rotateCookies(
+  config: GemaiConfig,
+): Promise<Result<{ cookies: string; rotatedAt: number }>> {
+  const client = new Client("https://accounts.google.com", {
+    keepAliveTimeout: 30_000,
+    keepAliveMaxTimeout: 60_000,
+    pipelining: 1,
+    connect: { rejectUnauthorized: true },
+  });
+
+  try {
+    const { statusCode, headers, body } = await client.request({
+      method: "POST",
+      path: "/RotateCookies",
+      headers: {
+        accept: "*/*",
+        "content-type": "application/json",
+        cookie: config.auth.cookies,
+        origin: "https://accounts.google.com",
+        referer: "https://accounts.google.com/",
+        "user-agent": config.context.userAgent,
+        ...buildSecChUaHeaders(config),
+      },
+      body: '[000,"-0000000000000000000"]',
+      headersTimeout: 15_000,
+      bodyTimeout: 30_000,
+    });
+
+    const rawBuffer = await readStreamWithTimeouts(body, 10_000, 20_000);
+    const raw = rawBuffer.toString("utf-8");
+
+    if (isSessionExpiredResponse(raw)) {
+      return fail(new Error("Session expired — __Secure-1PSID is invalid, re-login needed"));
+    }
+
+    if (statusCode === 401) {
+      return fail(new Error("Session expired – __Secure-1PSID is invalid, re-login needed"));
+    }
+
+    if (statusCode !== 200) {
+      return fail(
+        new Error(`RotateCookies failed with status ${statusCode}: ${raw.slice(0, 500)}`),
+      );
+    }
+
+    const setCookieValues: string[] = [];
+    if (typeof headers === "object" && headers !== null) {
+      const rawHeader = (headers as Record<string, unknown>)["set-cookie"];
+      if (Array.isArray(rawHeader)) {
+        setCookieValues.push(...rawHeader.map(String));
+      } else if (typeof rawHeader === "string" && rawHeader) {
+        setCookieValues.push(rawHeader);
+      }
+    }
+
+    const updates = new Map<string, string>();
+    for (const entry of setCookieValues) {
+      const semiIdx = entry.indexOf(";");
+      const nameValue = semiIdx === -1 ? entry.trim() : entry.slice(0, semiIdx).trim();
+      const eqIdx = nameValue.indexOf("=");
+      if (eqIdx === -1) continue;
+      const name = nameValue.slice(0, eqIdx).trim();
+      const value = nameValue.slice(eqIdx + 1).trim();
+      if (name) updates.set(name, value);
+    }
+
+    if (updates.size === 0) {
+      // 200 but no Set-Cookie — treat as no-op
+      return ok({ cookies: config.auth.cookies, rotatedAt: Date.now() });
+    }
+
+    const updatedCookies = updateCookieString(config.auth.cookies, updates);
+    return ok({ cookies: updatedCookies, rotatedAt: Date.now() });
+  } catch (err) {
+    return fail(err instanceof Error ? err : new Error(String(err)));
+  } finally {
+    await client.close();
+  }
 }

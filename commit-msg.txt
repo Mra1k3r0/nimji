@@ -1,0 +1,18 @@
+feat(nimji): add session persistence, image pipeline, and transport fixes
+
+- add rotateCookies() via google's internal POST /rotatecookies endpoint
+- add dual-mode keepalive: rotate every 8 min + batchexecute every 10 min
+- add cli rotates cookies on every startup for freshness
+- add aes-256-gcm encryption for rotated cookies gated on ENC_KEY env var
+- add .env staleness warning when file is older than 24h
+- add browser extension auto-rotate via chrome.alarms
+- add dotenv for .env file auto-loading
+- add impit for tls fingerprint impersonation on google cdn
+- add 3-hop text/plain redirect chain following (gg-dl -> fife -> lh3)
+- add =s0?alr=yes suffix for full native resolution (1408x768)
+- fix sec-ch-ua brand order to match current chrome
+- fix payload slots to match current browser behavior (97 slots)
+- update DEFAULT_BL_BUILD to 20260812.16_p0 and CHROME_FULL_VERSION to 151.0.7922.138
+- add prepack script for auto-build on npm publish
+- bump deps: eslint, globals, prettier, tsx, typescript-eslint, undici, @types/node
+- bump version to 0.1.0

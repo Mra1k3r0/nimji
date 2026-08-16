@@ -1,6 +1,6 @@
 {
   "name": "nimji",
-  "version": "0.0.5",
+  "version": "0.1.0",
   "description": "Promise-first TypeScript client and nimji CLI for Gemini web chat: multi-turn sessions, configurable retries and keepalive, auth via env or JSON config, and a polished terminal UI.",
   "keywords": [
     "ai",
@@ -56,6 +56,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "prepack": "npm run build",
     "test": "node --import tsx/esm --test tests/paths.test.ts tests/images.test.ts tests/parser.test.ts tests/session.test.ts tests/config.test.ts tests/transport.test.ts tests/client.test.ts",
     "test:watch": "node --import tsx/esm --test --watch tests/paths.test.ts tests/images.test.ts tests/parser.test.ts tests/session.test.ts tests/config.test.ts tests/transport.test.ts tests/client.test.ts",
     "start": "node --env-file=.env dist/cli.js",
@@ -70,6 +71,8 @@
     "release:major": "npm version major"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
+    "impit": "^0.14.3",
     "strip-json-comments": "^5.0.3",
     "undici": "^8.2.0"
   },

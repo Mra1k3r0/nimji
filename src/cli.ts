@@ -1,12 +1,13 @@
 ﻿#!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
 import { createClient } from "./client.js";
+import { rotateCookies } from "./transport.js";
 import { IMAGE_PIPELINE_DISABLED, inferMimeTypeFromPath, uploadImageToGemini } from "./images.js";
 import { loadConfigFromEnv, mergeProjectConfigIntoEnv, validateConfig } from "./config.js";
 import { resolveAppHomeDir } from "./paths.js";
@@ -929,14 +930,21 @@ async function main(): Promise<void> {
   const noSaveImages = process.argv.includes("--no-save-images");
   const saveImagesRequested = saveImagesExplicit || (imageMode && !noSaveImages);
   const uploadImagesRequested = hasFlag("--upload-images", "--upload");
-  const saveImages = saveImagesRequested && !IMAGE_PIPELINE_DISABLED;
-  const uploadImages = uploadImagesRequested && !IMAGE_PIPELINE_DISABLED;
+
+  if ((saveImagesExplicit || uploadImagesRequested) && IMAGE_PIPELINE_DISABLED) {
+    process.env.IMAGE_PIPELINE_ENABLED = "1";
+  }
+
+  const pipelineActive = process.env.IMAGE_PIPELINE_ENABLED === "1";
+  const saveImages = saveImagesRequested && pipelineActive;
+  const uploadImages = uploadImagesRequested && pipelineActive;
   const showSourceImageUrls = hasFlag("--show-source-image-urls");
   const resetSession = process.argv.includes("--reset-session");
   const noSession = process.argv.includes("--no-session");
   const keepalive = hasFlag("--keepalive", "--keep-alive");
   const noRetry = process.argv.includes("--no-retry");
   const noSessionRecover = process.argv.includes("--no-session-recover");
+  const resumeSession = process.argv.includes("--resume");
   const mode = (hasFlag("--chat") ? "chat" : (valueOf("--mode") ?? "once")).toLowerCase();
   const keepaliveMinutes = toPositiveInt(
     valueOf("--keepalive-minutes", "--keep-alive-minutes") ??
@@ -956,10 +964,29 @@ async function main(): Promise<void> {
 
   const config = loadConfigFromEnv();
 
-  if (IMAGE_PIPELINE_DISABLED && (saveImagesRequested || uploadImagesRequested)) {
+  // Warn if .env file is older than 24h — AT_TOKEN/F_SID may be stale
+  const envPaths = [".env", path.resolve(resolveAppHomeDir(), ".env")];
+  for (const envPath of envPaths) {
+    try {
+      const stat = statSync(envPath);
+      const ageMs = Date.now() - stat.mtimeMs;
+      const ageH = Math.floor(ageMs / 3_600_000);
+      if (ageH >= 24) {
+        banner(
+          "warn",
+          `.env is ${ageH}h old — AT_TOKEN/F_SID may be stale. Re-export from browser extension.`,
+        );
+      }
+      break; // only check first existing .env
+    } catch {
+      // file doesn't exist, try next path
+    }
+  }
+
+  if (!pipelineActive && (saveImagesRequested || uploadImagesRequested)) {
     banner(
       "warn",
-      "image save/upload skipped — lh3 pipeline disabled (images.ts IMAGE_PIPELINE_DISABLED)",
+      "image save/upload skipped — set IMAGE_PIPELINE_ENABLED=1 or pass --save-images explicitly",
     );
   }
 
@@ -980,16 +1007,42 @@ async function main(): Promise<void> {
 
   let client: GemaiClient;
   try {
-    client = createClient(config, hooks);
+    let effectiveConfig = config;
+    if (!noSession) {
+      const rotated = await store.loadRotatedCookies();
+      if (rotated) {
+        effectiveConfig = {
+          ...config,
+          auth: { ...config.auth, cookies: rotated.cookies },
+        };
+      }
+    }
+    const checked = validateConfig(effectiveConfig);
+    if (checked.ok) {
+      const result = await rotateCookies(checked.value);
+      if (result.ok) {
+        effectiveConfig = {
+          ...effectiveConfig,
+          auth: { ...effectiveConfig.auth, cookies: result.value.cookies },
+        };
+        await store.saveRotatedCookies(result.value.cookies, result.value.rotatedAt);
+        banner("ok", "cookies rotated");
+      }
+    }
+    client = createClient(effectiveConfig, hooks);
   } catch (err) {
     banner("error", err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
 
   if (!noSession) {
-    const restored = await store.load();
-    if (restored.conversationId) {
-      client.setConversation(restored);
+    // one-shot: only resume when --resume is passed
+    const shouldRestore = mode === "chat" || resumeSession;
+    if (shouldRestore) {
+      const restored = await store.load();
+      if (restored.conversationId) {
+        client.setConversation(restored);
+      }
     }
   }
 
