@@ -2,6 +2,7 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { ok, err as fail, tryCatch } from "./result.js";
 import stripJsonComments from "strip-json-comments";
 import { resolveAppHomeDir } from "./paths.js";
 import type {
@@ -10,7 +11,6 @@ import type {
   KeepaliveOptions,
   Result,
 } from "./types.js";
-import { ok, fail } from "./types.js";
 
 /** Flat env-style keys (e.g. `COOKIES`) passed into {@link loadConfigFromEnv} / {@link create}. */
 export type ConfigOverrides = Readonly<
@@ -149,7 +149,7 @@ export function resetProjectConfigMergeCache(): void {
 const MAX_KEEPALIVE_F_REQ_BYTES = 512 * 1024;
 
 function extractRpcIdFromFReqOuter(json: string): string | null {
-  try {
+  return tryCatch(() => {
     const parsed: unknown = JSON.parse(json);
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
     const layer1 = parsed[0];
@@ -157,9 +157,7 @@ function extractRpcIdFromFReqOuter(json: string): string | null {
     const triple = layer1[0];
     if (!Array.isArray(triple) || typeof triple[0] !== "string") return null;
     return triple[0];
-  } catch {
-    return null;
-  }
+  }).unwrapOr(null);
 }
 
 function loadKeepaliveBatchexecute(cwd: string, pick: ConfigPick): KeepaliveBatchexecuteConfig {
@@ -184,18 +182,14 @@ function loadKeepaliveBatchexecute(cwd: string, pick: ConfigPick): KeepaliveBatc
       throw new Error(`KEEPALIVE_F_REQ_PATH exceeds ${MAX_KEEPALIVE_F_REQ_BYTES} bytes: ${abs}`);
     }
     fReqOuterJson = buf.toString("utf8").trim();
-    try {
-      JSON.parse(fReqOuterJson);
-    } catch (err) {
-      throw new Error(`Invalid JSON in KEEPALIVE_F_REQ_PATH (${abs})`, { cause: err });
-    }
+    tryCatch(() => JSON.parse(fReqOuterJson!))
+      .mapErr((err) => new Error(`Invalid JSON in KEEPALIVE_F_REQ_PATH (${abs})`, { cause: err }))
+      .unwrap();
   } else if (freqInline) {
     fReqOuterJson = freqInline.trim();
-    try {
-      JSON.parse(fReqOuterJson);
-    } catch (err) {
-      throw new Error("Invalid JSON in KEEPALIVE_F_REQ", { cause: err });
-    }
+    tryCatch(() => JSON.parse(fReqOuterJson!))
+      .mapErr((err) => new Error("Invalid JSON in KEEPALIVE_F_REQ", { cause: err }))
+      .unwrap();
   }
 
   let rpcId: string;

@@ -1,3 +1,4 @@
+import { tryCatch } from "./result.js";
 import type { CandidateScore, ConversationState, ExtractedPayload } from "./types.js";
 function extractConversationState(payload: unknown): ConversationState {
   const state: ConversationState = {};
@@ -37,12 +38,10 @@ function decodeWrbFrame(chunk: unknown): unknown[] {
   if (Array.isArray(chunk)) return chunk;
   if (typeof chunk !== "string") return [];
   const normalized = chunk.trim().replace(/\n\d+$/, "");
-  try {
+  return tryCatch(() => {
     const parsed = JSON.parse(normalized);
     return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  }).unwrapOr([]);
 }
 
 function looksLikeStandaloneLocation(value: string): boolean {
@@ -226,11 +225,7 @@ export function extractResponse(chunks: unknown[], rawStreamText?: string): Extr
   if (rawStreamText) {
     discoverLh3ImageUrls(rawStreamText, imageUrls);
     if (/%[0-9A-Fa-f]{2}/.test(rawStreamText)) {
-      try {
-        discoverLh3ImageUrls(decodeURIComponent(rawStreamText), imageUrls);
-      } catch {
-        /* noop */
-      }
+      tryCatch(() => discoverLh3ImageUrls(decodeURIComponent(rawStreamText), imageUrls));
     }
   }
 
@@ -249,7 +244,7 @@ export function extractResponse(chunks: unknown[], rawStreamText?: string): Extr
 
       discoverLh3ImageUrls(payloadStr, imageUrls);
 
-      try {
+      tryCatch(() => {
         const payload = JSON.parse(payloadStr);
         const candidates: string[] = [];
         collectTextCandidates(payload, candidates);
@@ -264,9 +259,7 @@ export function extractResponse(chunks: unknown[], rawStreamText?: string): Extr
         for (const value of candidates) {
           allCandidates.push({ value, score: scoreCandidate(value) });
         }
-      } catch {
-        continue;
-      }
+      });
     }
   }
 

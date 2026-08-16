@@ -25,7 +25,7 @@ import type {
   KeepaliveOptions,
   Result,
 } from "./types.js";
-import { ok, fail } from "./types.js";
+import { tryAsync } from "./result.js";
 import {
   loadConfigFromEnv,
   validateConfig,
@@ -42,7 +42,7 @@ export function createClient(
   hooksOrOptions?: GemaiHooks | ClientOptions,
 ): GemaiClient {
   const checked = validateConfig(config);
-  if (!checked.ok) throw checked.error;
+  if (checked.isErr()) throw checked.error;
   const cfg = checked.value;
 
   let authOverride: Partial<GemaiAuth> = {};
@@ -109,112 +109,110 @@ export function createClient(
     });
 
     try {
-      const { statusCode, headers, body } = await client.request({
-        method: "POST",
-        path: requestPath,
-        headers: buildStreamHeaders(requestConfig),
-        body: requestBody,
-        headersTimeout: 30_000,
-        bodyTimeout: 120_000,
-      });
+      return await tryAsync(async () => {
+        const { statusCode, headers, body } = await client.request({
+          method: "POST",
+          path: requestPath,
+          headers: buildStreamHeaders(requestConfig),
+          body: requestBody,
+          headersTimeout: 30_000,
+          bodyTimeout: 120_000,
+        });
 
-      // mid-stream: grab image urls as chunks arrive
-      const earlyDownloadedPaths: string[] = [];
-      const earlyDownloadedUrls = new Set<string>();
-      const earlyDownloadJobs: Promise<void>[] = [];
-      const seenStreamUrls = new Set<string>();
-      const outputDir = options.imageOutputDir ?? "./output-images";
-      const wantsSave = saveImages;
+        // mid-stream: grab image urls as chunks arrive
+        const earlyDownloadedPaths: string[] = [];
+        const earlyDownloadedUrls = new Set<string>();
+        const earlyDownloadJobs: Promise<void>[] = [];
+        const seenStreamUrls = new Set<string>();
+        const outputDir = options.imageOutputDir ?? "./output-images";
+        const wantsSave = saveImages;
 
-      const onStreamChunk = wantsSave
-        ? (chunk: Buffer) => {
-            const text = chunk.toString("utf-8");
-            const found = new Set<string>();
-            discoverLh3ImageUrls(text, found);
-            for (const url of found) {
-              if (seenStreamUrls.has(url)) continue;
-              seenStreamUrls.add(url);
-              const job = downloadSingleImage(requestConfig, url, outputDir, hooks).then((p) => {
-                if (p) {
-                  earlyDownloadedPaths.push(p);
-                  earlyDownloadedUrls.add(url);
-                }
-              });
-              earlyDownloadJobs.push(job);
+        const onStreamChunk = wantsSave
+          ? (chunk: Buffer) => {
+              const text = chunk.toString("utf-8");
+              const found = new Set<string>();
+              discoverLh3ImageUrls(text, found);
+              for (const url of found) {
+                if (seenStreamUrls.has(url)) continue;
+                seenStreamUrls.add(url);
+                const job = downloadSingleImage(requestConfig, url, outputDir, hooks).then((p) => {
+                  if (p) {
+                    earlyDownloadedPaths.push(p);
+                    earlyDownloadedUrls.add(url);
+                  }
+                });
+                earlyDownloadJobs.push(job);
+              }
             }
-          }
-        : undefined;
+          : undefined;
 
-      const rawBuffer = await readStreamWithTimeouts(
-        body,
-        idleTimeout,
-        maxTimeout,
-        (idleMs) => console.log(`[*] Stream idle for ${idleMs}ms, finalizing partial response.`),
-        (maxMs) => console.log(`[*] Stream max duration ${maxMs}ms reached, finalizing.`),
-        onStreamChunk,
-      );
-      const raw = rawBuffer.toString("utf-8");
-
-      if (isSessionExpiredResponse(raw)) {
-        return fail(
-          new Error(
-            "Session expired — Gemini returned a login page. Re-login to gemini.google.com and re-export cookies.",
-          ),
+        const rawBuffer = await readStreamWithTimeouts(
+          body,
+          idleTimeout,
+          maxTimeout,
+          (idleMs) => console.log(`[*] Stream idle for ${idleMs}ms, finalizing partial response.`),
+          (maxMs) => console.log(`[*] Stream max duration ${maxMs}ms reached, finalizing.`),
+          onStreamChunk,
         );
-      }
+        const raw = rawBuffer.toString("utf-8");
 
-      if (earlyDownloadJobs.length > 0) {
-        await Promise.allSettled(earlyDownloadJobs);
-      }
+        if (isSessionExpiredResponse(raw)) {
+          throw new Error(
+            "Session expired — Gemini returned a login page. Re-login to gemini.google.com and re-export cookies.",
+          );
+        }
 
-      if (statusCode !== 200) {
-        return fail(new Error(`Non-200 response (${statusCode}): ${raw.slice(0, 1500)}`));
-      }
+        if (earlyDownloadJobs.length > 0) {
+          await Promise.allSettled(earlyDownloadJobs);
+        }
 
-      const chunks = parseStreamChunks(raw);
-      const extracted = extractResponse(chunks, raw);
+        if (statusCode !== 200) {
+          throw new Error(`Non-200 response (${statusCode}): ${raw.slice(0, 1500)}`);
+        }
 
-      // Upgrade gg-dl redirect tokens → rd-gg stable paths before download attempts
-      const upgradedUrls = await upgradeGgDlUrlsFromRedirects(requestConfig, extracted.imageUrls);
-      const resolvedImageUrls = sortStableGoogleImageUrls(upgradedUrls);
+        const chunks = parseStreamChunks(raw);
+        const extracted = extractResponse(chunks, raw);
 
-      if (extracted.conversation.conversationId) {
-        conversation = {
-          conversationId: extracted.conversation.conversationId,
-          responseId: extracted.conversation.responseId,
-          choiceId: extracted.conversation.choiceId,
+        // Upgrade gg-dl redirect tokens → rd-gg stable paths before download attempts
+        const upgradedUrls = await upgradeGgDlUrlsFromRedirects(requestConfig, extracted.imageUrls);
+        const resolvedImageUrls = sortStableGoogleImageUrls(upgradedUrls);
+
+        if (extracted.conversation.conversationId) {
+          conversation = {
+            conversationId: extracted.conversation.conversationId,
+            responseId: extracted.conversation.responseId,
+            choiceId: extracted.conversation.choiceId,
+          };
+        }
+        await hooks?.onCandidates?.(extracted.candidates as CandidateScore[]);
+
+        const remainingUrls = resolvedImageUrls.filter((u) => !earlyDownloadedUrls.has(u));
+        const { savedPaths: lateSavedPaths, uploadedUrls } =
+          (saveImages || wantsUpload) && remainingUrls.length > 0
+            ? await downloadImages(
+                requestConfig,
+                remainingUrls,
+                outputDir,
+                { saveFiles: saveImages, uploadToImgBB: wantsUpload },
+                hooks,
+              )
+            : { savedPaths: [], uploadedUrls: [] };
+        const savedPaths = [...earlyDownloadedPaths, ...lateSavedPaths];
+
+        return {
+          text: extracted.text,
+          imageUrls: includeImages ? [...resolvedImageUrls] : [],
+          savedImagePaths: savedPaths,
+          uploadedImageUrls: uploadedUrls,
+          conversation: { ...conversation },
+          meta: {
+            statusCode,
+            contentType: String(headers["content-type"] ?? "unknown"),
+            rawSize: raw.length,
+            chunkCount: chunks.length,
+          },
         };
-      }
-      await hooks?.onCandidates?.(extracted.candidates as CandidateScore[]);
-
-      const remainingUrls = resolvedImageUrls.filter((u) => !earlyDownloadedUrls.has(u));
-      const { savedPaths: lateSavedPaths, uploadedUrls } =
-        (saveImages || wantsUpload) && remainingUrls.length > 0
-          ? await downloadImages(
-              requestConfig,
-              remainingUrls,
-              outputDir,
-              { saveFiles: saveImages, uploadToImgBB: wantsUpload },
-              hooks,
-            )
-          : { savedPaths: [], uploadedUrls: [] };
-      const savedPaths = [...earlyDownloadedPaths, ...lateSavedPaths];
-
-      return ok({
-        text: extracted.text,
-        imageUrls: includeImages ? [...resolvedImageUrls] : [],
-        savedImagePaths: savedPaths,
-        uploadedImageUrls: uploadedUrls,
-        conversation: { ...conversation },
-        meta: {
-          statusCode,
-          contentType: String(headers["content-type"] ?? "unknown"),
-          rawSize: raw.length,
-          chunkCount: chunks.length,
-        },
       });
-    } catch (err) {
-      return fail(err instanceof Error ? err : new Error(String(err)));
     } finally {
       await client.close();
     }
@@ -261,21 +259,24 @@ export function createClient(
             reqId: String(Math.floor(1_000_000 + Math.random() * 9_000_000)),
           },
         };
-        void rotateCookies(kaConfig).then((result) => {
-          if (result.ok) {
-            authOverride = { ...authOverride, cookies: result.value.cookies };
-          } else {
-            const isSessionExpired = result.error.message.includes("Session expired");
-            if (isSessionExpired) {
-              console.error(
-                `[keepalive] FATAL: Session expired, re-login needed — ${result.error.message}`,
-              );
-              stopKeepalive();
-            }
-            // Transient errors: log and continue — next batchexecute cycle
-            // will still run.
-          }
-        });
+        void rotateCookies(kaConfig).then((result) =>
+          result.match({
+            ok: (rotated) => {
+              authOverride = { ...authOverride, cookies: rotated.cookies };
+            },
+            err: (error) => {
+              const isSessionExpired = error.message.includes("Session expired");
+              if (isSessionExpired) {
+                console.error(
+                  `[keepalive] FATAL: Session expired, re-login needed — ${error.message}`,
+                );
+                stopKeepalive();
+              }
+              // Transient errors: log and continue — next batchexecute cycle
+              // will still run.
+            },
+          }),
+        );
       }, rotateIntervalMs);
     }
   };

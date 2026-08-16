@@ -1,6 +1,7 @@
 import { Impit, type HttpMethod } from "impit";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { tryAsync } from "./result.js";
 import { buildSecChUaHeaders } from "./transport.js";
 import type { GemaiConfig, GemaiHooks, ImageAttachment } from "./types.js";
 
@@ -40,39 +41,39 @@ async function followRedirectChain(config: GemaiConfig, url: string): Promise<st
   const profile = buildHeaderProfiles(config)[0];
 
   for (let hop = 0; hop < 5; hop++) {
-    try {
-      const res = await smartFetch(current, {
+    const fetchResult = await tryAsync(() =>
+      smartFetch(current, {
         method: "GET",
         redirect: "manual",
         headers: profile?.headers ?? {},
         signal: AbortSignal.timeout(15_000),
-      });
+      }),
+    );
+    if (fetchResult.isErr()) break;
+    const res = fetchResult.value;
 
-      if (res.status >= 300 && res.status < 400) {
-        const loc = res.headers.get("location");
-        if (!loc) break;
-        current = new URL(loc, current).href;
-        continue;
-      }
-
-      const ct = String(res.headers.get("content-type") ?? "").toLowerCase();
-
-      if (ct.startsWith("image/")) {
-        return current;
-      }
-
-      if (ct.includes("text/")) {
-        const body = (await res.text?.()) ?? (await res.arrayBuffer?.())?.toString?.() ?? "";
-        const nextUrl = body.trim();
-        if (!nextUrl.startsWith("http")) break;
-        current = nextUrl;
-        continue;
-      }
-
-      break;
-    } catch {
-      break;
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      if (!loc) break;
+      current = new URL(loc, current).href;
+      continue;
     }
+
+    const ct = String(res.headers.get("content-type") ?? "").toLowerCase();
+
+    if (ct.startsWith("image/")) {
+      return current;
+    }
+
+    if (ct.includes("text/")) {
+      const body = (await res.text?.()) ?? (await res.arrayBuffer?.())?.toString?.() ?? "";
+      const nextUrl = body.trim();
+      if (!nextUrl.startsWith("http")) break;
+      current = nextUrl;
+      continue;
+    }
+
+    break;
   }
 
   return current;
@@ -206,11 +207,7 @@ function buildHeaderProfiles(
 }
 
 async function drainResponseBody(res: LiteResponse): Promise<void> {
-  try {
-    await res.arrayBuffer();
-  } catch {
-    /* noop */
-  }
+  await tryAsync(() => res.arrayBuffer());
 }
 
 /** resolves gg-dl urls through the redirect chain */
@@ -247,7 +244,7 @@ export async function downloadImages(
 
   const perUrl = await mapLimit([...urls], 4, async (url) => {
     hooks?.onImageDownloadAttempt?.(url);
-    try {
+    const result = await tryAsync(async () => {
       // resolve through redirect chain (=s0 suffix applied inside)
       const fullResUrl = await followRedirectChain(config, url);
       let res = await smartFetch(fullResUrl, {
@@ -303,18 +300,23 @@ export async function downloadImages(
 
       let uploadedUrl: string | null = null;
       if (uploadToImgBBEnabled && imgbbApiKey) {
-        try {
-          uploadedUrl = await uploadToImgBB(imgbbApiKey, buffer, fileName, imgbbExpiration);
-        } catch {
+        const uploadResult = await tryAsync(() =>
+          uploadToImgBB(imgbbApiKey, buffer, fileName, imgbbExpiration),
+        );
+        if (uploadResult.ok) {
+          uploadedUrl = uploadResult.value;
+        } else {
           hooks?.onImageDownloadSkip?.("imgbb upload failed", url);
         }
       }
 
       return { savedPath: saveFiles ? filePath : null, uploadedUrl };
-    } catch {
+    });
+    if (result.isErr()) {
       hooks?.onImageDownloadSkip?.("network error", url);
       return null;
     }
+    return result.value;
   });
 
   return {
@@ -337,7 +339,7 @@ export async function downloadSingleImage(
   if (!profile) return null;
 
   hooks?.onImageDownloadAttempt?.(url);
-  try {
+  const result = await tryAsync(async () => {
     // resolve through redirect chain
     const fullResUrl = await followRedirectChain(config, url);
     let res = await smartFetch(fullResUrl, {
@@ -371,9 +373,8 @@ export async function downloadSingleImage(
     const filePath = path.join(outputDir, fileName);
     await writeFile(filePath, Buffer.from(bytes));
     return filePath;
-  } catch {
-    return null;
-  }
+  });
+  return result.unwrapOr(null);
 }
 
 const KNOWN_MIME_TYPES: Readonly<Record<string, string>> = {

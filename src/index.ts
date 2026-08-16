@@ -29,7 +29,7 @@ export {
   runBatchexecuteKeepalive,
 } from "./transport.js";
 export { createSessionStore } from "./session.js";
-export { ok, fail } from "./types.js";
+export { ok, err as fail } from "./result.js";
 export type {
   CandidateScore,
   ClientOptions,

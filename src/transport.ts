@@ -1,6 +1,6 @@
 import { Client } from "undici";
+import { tryCatch, tryAsync } from "./result.js";
 import type { ConversationState, GemaiConfig, ImageAttachment, Result } from "./types.js";
-import { fail, ok } from "./types.js";
 
 /** Builds `/assistant.lamda.BardFrontendService/StreamGenerate` URL + query string. */
 export function buildStreamGeneratePath(config: GemaiConfig): string {
@@ -98,11 +98,9 @@ export function buildBatchexecuteKeepaliveBody(config: GemaiConfig): string {
   } else {
     const rpc = ka?.rpcId ?? "aPya6c";
     const inner = ka?.innerPayloadJson ?? "[]";
-    try {
-      JSON.parse(inner);
-    } catch {
-      throw new Error("KEEPALIVE_INNER_PAYLOAD must be valid JSON text");
-    }
+    tryCatch(() => JSON.parse(inner))
+      .mapErr(() => new Error("KEEPALIVE_INNER_PAYLOAD must be valid JSON text"))
+      .unwrap();
     fReqValue = JSON.stringify([[[rpc, inner, null, "generic"]]]);
   }
 
@@ -152,39 +150,37 @@ export async function runBatchexecuteKeepalive(
   });
 
   try {
-    const { statusCode, body } = await client.request({
-      method: "POST",
-      path: requestPath,
-      headers: buildBatchexecuteHeaders(requestConfig),
-      body: requestBody,
-      headersTimeout: 30_000,
-      bodyTimeout: 60_000,
-    });
+    return await tryAsync(async () => {
+      const { statusCode, body } = await client.request({
+        method: "POST",
+        path: requestPath,
+        headers: buildBatchexecuteHeaders(requestConfig),
+        body: requestBody,
+        headersTimeout: 30_000,
+        bodyTimeout: 60_000,
+      });
 
-    const rawBuffer = await readStreamWithTimeouts(
-      body,
-      15_000,
-      45_000,
-      () => undefined,
-      () => undefined,
-    );
-    const raw = rawBuffer.toString("utf-8");
-
-    // Detect session expiry — HTML instead of JSON means cookies are stale
-    if (isSessionExpiredResponse(raw)) {
-      return fail(
-        new Error(
-          "Session expired — received HTML login page instead of JSON. Re-login to gemini.google.com and re-export cookies.",
-        ),
+      const rawBuffer = await readStreamWithTimeouts(
+        body,
+        15_000,
+        45_000,
+        () => undefined,
+        () => undefined,
       );
-    }
+      const raw = rawBuffer.toString("utf-8");
 
-    if (statusCode !== 200) {
-      return fail(new Error(`batchexecute keepalive failed (${statusCode}): ${raw.slice(0, 500)}`));
-    }
-    return ok({ statusCode, rawSize: raw.length });
-  } catch (err) {
-    return fail(err instanceof Error ? err : new Error(String(err)));
+      // Detect session expiry — HTML instead of JSON means cookies are stale
+      if (isSessionExpiredResponse(raw)) {
+        throw new Error(
+          "Session expired — received HTML login page instead of JSON. Re-login to gemini.google.com and re-export cookies.",
+        );
+      }
+
+      if (statusCode !== 200) {
+        throw new Error(`batchexecute keepalive failed (${statusCode}): ${raw.slice(0, 500)}`);
+      }
+      return { statusCode, rawSize: raw.length };
+    });
   } finally {
     await client.close();
   }
@@ -367,11 +363,8 @@ export function parseStreamChunks(raw: string): unknown[] {
     const chunk = normalized.slice(chunkStart, chunkEnd).replace(/\s+$/, "");
     if (!chunk) continue;
 
-    try {
-      results.push(JSON.parse(chunk));
-    } catch {
-      results.push(chunk);
-    }
+    const parsed = tryCatch(() => JSON.parse(chunk));
+    results.push(parsed.unwrapOr(chunk));
   }
 
   return results;
@@ -496,70 +489,68 @@ export async function rotateCookies(
   });
 
   try {
-    const { statusCode, headers, body } = await client.request({
-      method: "POST",
-      path: "/RotateCookies",
-      headers: {
-        accept: "*/*",
-        "content-type": "application/json",
-        cookie: config.auth.cookies,
-        origin: "https://accounts.google.com",
-        referer: "https://accounts.google.com/",
-        "user-agent": config.context.userAgent,
-        ...buildSecChUaHeaders(config),
-      },
-      body: '[000,"-0000000000000000000"]',
-      headersTimeout: 15_000,
-      bodyTimeout: 30_000,
-    });
+    return await tryAsync(async () => {
+      const { statusCode, headers, body } = await client.request({
+        method: "POST",
+        path: "/RotateCookies",
+        headers: {
+          accept: "*/*",
+          "content-type": "application/json",
+          cookie: config.auth.cookies,
+          origin: "https://accounts.google.com",
+          referer: "https://accounts.google.com/",
+          "user-agent": config.context.userAgent,
+          ...buildSecChUaHeaders(config),
+        },
+        body: '[000,"-0000000000000000000"]',
+        headersTimeout: 15_000,
+        bodyTimeout: 30_000,
+      });
 
-    const rawBuffer = await readStreamWithTimeouts(body, 10_000, 20_000);
-    const raw = rawBuffer.toString("utf-8");
+      const rawBuffer = await readStreamWithTimeouts(body, 10_000, 20_000);
+      const raw = rawBuffer.toString("utf-8");
 
-    if (isSessionExpiredResponse(raw)) {
-      return fail(new Error("Session expired — __Secure-1PSID is invalid, re-login needed"));
-    }
-
-    if (statusCode === 401) {
-      return fail(new Error("Session expired – __Secure-1PSID is invalid, re-login needed"));
-    }
-
-    if (statusCode !== 200) {
-      return fail(
-        new Error(`RotateCookies failed with status ${statusCode}: ${raw.slice(0, 500)}`),
-      );
-    }
-
-    const setCookieValues: string[] = [];
-    if (typeof headers === "object" && headers !== null) {
-      const rawHeader = (headers as Record<string, unknown>)["set-cookie"];
-      if (Array.isArray(rawHeader)) {
-        setCookieValues.push(...rawHeader.map(String));
-      } else if (typeof rawHeader === "string" && rawHeader) {
-        setCookieValues.push(rawHeader);
+      if (isSessionExpiredResponse(raw)) {
+        throw new Error("Session expired — __Secure-1PSID is invalid, re-login needed");
       }
-    }
 
-    const updates = new Map<string, string>();
-    for (const entry of setCookieValues) {
-      const semiIdx = entry.indexOf(";");
-      const nameValue = semiIdx === -1 ? entry.trim() : entry.slice(0, semiIdx).trim();
-      const eqIdx = nameValue.indexOf("=");
-      if (eqIdx === -1) continue;
-      const name = nameValue.slice(0, eqIdx).trim();
-      const value = nameValue.slice(eqIdx + 1).trim();
-      if (name) updates.set(name, value);
-    }
+      if (statusCode === 401) {
+        throw new Error("Session expired – __Secure-1PSID is invalid, re-login needed");
+      }
 
-    if (updates.size === 0) {
-      // 200 but no Set-Cookie — treat as no-op
-      return ok({ cookies: config.auth.cookies, rotatedAt: Date.now() });
-    }
+      if (statusCode !== 200) {
+        throw new Error(`RotateCookies failed with status ${statusCode}: ${raw.slice(0, 500)}`);
+      }
 
-    const updatedCookies = updateCookieString(config.auth.cookies, updates);
-    return ok({ cookies: updatedCookies, rotatedAt: Date.now() });
-  } catch (err) {
-    return fail(err instanceof Error ? err : new Error(String(err)));
+      const setCookieValues: string[] = [];
+      if (typeof headers === "object" && headers !== null) {
+        const rawHeader = (headers as Record<string, unknown>)["set-cookie"];
+        if (Array.isArray(rawHeader)) {
+          setCookieValues.push(...rawHeader.map(String));
+        } else if (typeof rawHeader === "string" && rawHeader) {
+          setCookieValues.push(rawHeader);
+        }
+      }
+
+      const updates = new Map<string, string>();
+      for (const entry of setCookieValues) {
+        const semiIdx = entry.indexOf(";");
+        const nameValue = semiIdx === -1 ? entry.trim() : entry.slice(0, semiIdx).trim();
+        const eqIdx = nameValue.indexOf("=");
+        if (eqIdx === -1) continue;
+        const name = nameValue.slice(0, eqIdx).trim();
+        const value = nameValue.slice(eqIdx + 1).trim();
+        if (name) updates.set(name, value);
+      }
+
+      if (updates.size === 0) {
+        // 200 but no Set-Cookie — treat as no-op
+        return { cookies: config.auth.cookies, rotatedAt: Date.now() };
+      }
+
+      const updatedCookies = updateCookieString(config.auth.cookies, updates);
+      return { cookies: updatedCookies, rotatedAt: Date.now() };
+    });
   } finally {
     await client.close();
   }

@@ -12,19 +12,19 @@ import { IMAGE_PIPELINE_DISABLED, inferMimeTypeFromPath, uploadImageToGemini } f
 import { loadConfigFromEnv, mergeProjectConfigIntoEnv, validateConfig } from "./config.js";
 import { resolveAppHomeDir } from "./paths.js";
 import { createSessionStore } from "./session.js";
+import { tryCatch, tryAsync } from "./result.js";
 import type { GemaiClient, GemaiHooks, GenerateResult, ImageAttachment, Result } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 function readPkgVersion(): string {
-  try {
+  const r = tryCatch(() => {
     const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
     const j = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
     return typeof j.version === "string" ? j.version : "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
+  });
+  return r.unwrapOr("0.0.0");
 }
 
 const PKG_VERSION = readPkgVersion();
@@ -264,7 +264,7 @@ async function runGenerateWithRetry(
     uploadImages,
     imageAttachment,
   });
-  if (!result.ok) {
+  if (result.isErr()) {
     return {
       result,
       issue: "partial_stream",
@@ -967,7 +967,7 @@ async function main(): Promise<void> {
   // Warn if .env file is older than 24h — AT_TOKEN/F_SID may be stale
   const envPaths = [".env", path.resolve(resolveAppHomeDir(), ".env")];
   for (const envPath of envPaths) {
-    try {
+    const result = tryCatch(() => {
       const stat = statSync(envPath);
       const ageMs = Date.now() - stat.mtimeMs;
       const ageH = Math.floor(ageMs / 3_600_000);
@@ -977,10 +977,8 @@ async function main(): Promise<void> {
           `.env is ${ageH}h old — AT_TOKEN/F_SID may be stale. Re-export from browser extension.`,
         );
       }
-      break; // only check first existing .env
-    } catch {
-      // file doesn't exist, try next path
-    }
+    });
+    if (result.isOk()) break; // only check first existing .env
   }
 
   if (!pipelineActive && (saveImagesRequested || uploadImagesRequested)) {
@@ -1005,8 +1003,7 @@ async function main(): Promise<void> {
     },
   };
 
-  let client: GemaiClient;
-  try {
+  const initResult = await tryAsync(async () => {
     let effectiveConfig = config;
     if (!noSession) {
       const rotated = await store.loadRotatedCookies();
@@ -1029,11 +1026,16 @@ async function main(): Promise<void> {
         banner("ok", "cookies rotated");
       }
     }
-    client = createClient(effectiveConfig, hooks);
-  } catch (err) {
-    banner("error", err instanceof Error ? err.message : String(err));
+    return createClient(effectiveConfig, hooks);
+  });
+  if (initResult.isErr()) {
+    banner(
+      "error",
+      initResult.error instanceof Error ? initResult.error.message : String(initResult.error),
+    );
     process.exit(1);
   }
+  const client = initResult.value;
 
   if (!noSession) {
     // one-shot: only resume when --resume is passed
@@ -1062,13 +1064,22 @@ async function main(): Promise<void> {
       banner("warn", `${detectedImagePath}: unrecognised image extension, skipping upload`);
     } else {
       banner("ok", `uploading image  ${muted(detectedImagePath)}  ${muted(`(${mimeType})`)}`);
-      try {
-        imageAttachment = await uploadImageToGemini(config, detectedImagePath);
-        banner("ok", `image attached  ${muted(imageAttachment.tokenPath.slice(0, 60))}…`);
-      } catch (err) {
-        banner("error", `image upload failed: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
-      }
+      const uploadResult = await tryAsync(async () =>
+        uploadImageToGemini(config, detectedImagePath),
+      );
+      uploadResult.match({
+        ok: (attachment) => {
+          imageAttachment = attachment;
+          banner("ok", `image attached  ${muted(attachment.tokenPath.slice(0, 60))}…`);
+        },
+        err: (error) => {
+          banner(
+            "error",
+            `image upload failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          process.exit(1);
+        },
+      });
     }
   }
 
@@ -1122,7 +1133,7 @@ async function main(): Promise<void> {
           maxRetries,
           turnAttachment,
         );
-        if (!result.ok) {
+        if (result.isErr()) {
           banner("error", result.error.message);
           continue;
         }
@@ -1174,7 +1185,7 @@ async function main(): Promise<void> {
         maxRetries,
         imageAttachment,
       );
-    if (!result.ok) {
+    if (result.isErr()) {
       banner("error", result.error.message);
       process.exit(1);
     }

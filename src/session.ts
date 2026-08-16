@@ -2,6 +2,7 @@ import { readFile, unlink, writeFile } from "node:fs/promises";
 import { mkdir } from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
+import { tryCatch, tryAsync } from "./result.js";
 import { resolveAppHomeDir } from "./paths.js";
 import type { ConversationState, SessionStore } from "./types.js";
 
@@ -22,7 +23,7 @@ export function encryptCookies(plaintext: string, key: Buffer): string {
 
 /** AES-256-GCM decrypt → plaintext or null */
 export function decryptCookies(encrypted: string, key: Buffer): string | null {
-  try {
+  return tryCatch(() => {
     const buf = Buffer.from(encrypted, "base64");
     if (buf.length < 28) return null;
     const iv = buf.subarray(0, 12);
@@ -30,13 +31,8 @@ export function decryptCookies(encrypted: string, key: Buffer): string | null {
     const ciphertext = buf.subarray(28);
     const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
     decipher.setAuthTag(authTag);
-    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString(
-      "utf8",
-    );
-    return plaintext;
-  } catch {
-    return null;
-  }
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+  }).unwrapOr(null);
 }
 
 const MAX_SESSION_FILE_BYTES = 128 * 1024;
@@ -80,33 +76,40 @@ export function createSessionStore(filePath?: string): SessionStore {
     path: resolved,
 
     async load(): Promise<ConversationState> {
-      try {
-        const buf = await readFile(resolved);
-        if (buf.length > MAX_SESSION_FILE_BYTES) return {};
-        const raw = buf.toString("utf8");
-        const parsed: unknown = JSON.parse(raw);
-        return normalizeConversationState(parsed);
-      } catch {
-        return {};
-      }
+      return (
+        await tryAsync(async () => {
+          const buf = await readFile(resolved);
+          if (buf.length > MAX_SESSION_FILE_BYTES) return {};
+          const raw = buf.toString("utf8");
+          const parsed: unknown = JSON.parse(raw);
+          return normalizeConversationState(parsed);
+        })
+      ).unwrapOr({});
     },
 
     async save(state: ConversationState): Promise<void> {
       // don't overwrite encrypted cookies with plaintext from getConversation()
       let rotatedCookies: string | undefined;
       let rotatedAt: number | undefined;
-      try {
+      const existing = await tryAsync(async () => {
         const buf = await readFile(resolved);
         if (buf.length <= MAX_SESSION_FILE_BYTES) {
           const parsed: unknown = JSON.parse(buf.toString("utf8"));
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
             const o = parsed as Record<string, unknown>;
-            if (typeof o["rotatedCookies"] === "string") rotatedCookies = o["rotatedCookies"];
-            if (typeof o["rotatedAt"] === "number") rotatedAt = o["rotatedAt"];
+            if (typeof o["rotatedCookies"] === "string")
+              return {
+                rotatedCookies: o["rotatedCookies"] as string,
+                rotatedAt:
+                  typeof o["rotatedAt"] === "number" ? (o["rotatedAt"] as number) : undefined,
+              };
           }
         }
-      } catch {
-        /* noop */
+        return undefined;
+      });
+      if (existing.ok && existing.value) {
+        rotatedCookies = existing.value.rotatedCookies;
+        rotatedAt = existing.value.rotatedAt;
       }
       const merged: ConversationState = {
         ...state,
@@ -117,38 +120,30 @@ export function createSessionStore(filePath?: string): SessionStore {
     },
 
     async clear(): Promise<void> {
-      try {
-        await unlink(resolved);
-      } catch {
-        /* noop */
-      }
+      await tryAsync(() => unlink(resolved));
     },
 
     async loadRotatedCookies(): Promise<{ cookies: string; rotatedAt: number } | null> {
-      try {
-        const buf = await readFile(resolved);
-        if (buf.length > MAX_SESSION_FILE_BYTES) return null;
-        const raw = buf.toString("utf8");
-        const parsed: unknown = JSON.parse(raw);
-        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-        const o = parsed as Record<string, unknown>;
-        const cookiesRaw = typeof o["rotatedCookies"] === "string" ? o["rotatedCookies"] : null;
-        const rotatedAt = typeof o["rotatedAt"] === "number" ? o["rotatedAt"] : null;
-        if (!cookiesRaw || rotatedAt === null) return null;
-        const cookies = encKey ? (decryptCookies(cookiesRaw, encKey) ?? cookiesRaw) : cookiesRaw;
-        return { cookies, rotatedAt };
-      } catch {
-        return null;
-      }
+      return (
+        await tryAsync(async () => {
+          const buf = await readFile(resolved);
+          if (buf.length > MAX_SESSION_FILE_BYTES) return null;
+          const raw = buf.toString("utf8");
+          const parsed: unknown = JSON.parse(raw);
+          if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+          const o = parsed as Record<string, unknown>;
+          const cookiesRaw = typeof o["rotatedCookies"] === "string" ? o["rotatedCookies"] : null;
+          const rotatedAt = typeof o["rotatedAt"] === "number" ? o["rotatedAt"] : null;
+          if (!cookiesRaw || rotatedAt === null) return null;
+          const cookies = encKey ? (decryptCookies(cookiesRaw, encKey) ?? cookiesRaw) : cookiesRaw;
+          return { cookies, rotatedAt };
+        })
+      ).unwrapOr(null);
     },
 
     async saveRotatedCookies(cookies: string, rotatedAt: number): Promise<void> {
-      let existing: ConversationState = {};
-      try {
-        existing = await this.load();
-      } catch {
-        /* noop */
-      }
+      const loaded = await tryAsync(() => this.load());
+      const existing = loaded.unwrapOr({});
       const stored = encKey ? encryptCookies(cookies, encKey) : cookies;
       const merged: ConversationState = { ...existing, rotatedCookies: stored, rotatedAt };
       await mkdir(path.dirname(resolved), { recursive: true });

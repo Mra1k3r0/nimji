@@ -1,12 +1,5 @@
-/** Explicit success/error result (used across the library instead of throwing). */
-export type Result<T, E = Error> =
-  { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: E };
-
-/** Mark a successful {@link Result}. */
-export const ok = <T>(value: T): Result<T, never> => ({ ok: true, value });
-
-/** Mark a failed {@link Result}. */
-export const fail = <E>(error: E): Result<never, E> => ({ ok: false, error });
+import type { Result } from "./result.js";
+export type { Result };
 
 /** Multi-turn conversation handles returned inside stream payloads. */
 export type ConversationState = {

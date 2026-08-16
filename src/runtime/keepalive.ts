@@ -14,7 +14,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export async function runKeepalive(options?: { once?: boolean; quiet?: boolean }): Promise<void> {
   let config = loadConfigFromEnv();
   const checked = validateConfig(config);
-  if (!checked.ok) throw checked.error;
+  if (checked.isErr()) throw checked.error;
   config = checked.value;
 
   const intervalMinutes = toPositiveInt(process.env.KEEPALIVE_INTERVAL_MINUTES, 10);
