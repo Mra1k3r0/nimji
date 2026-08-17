@@ -1,15 +1,16 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fetch as undiciFetch, type RequestInit as UndiciRequestInit, type Response as UndiciResponse } from "undici";
+import {
+  fetch as undiciFetch,
+  type RequestInit as UndiciRequestInit,
+  type Response as UndiciResponse,
+} from "undici";
 import { tryAsync } from "./result.js";
 import { buildSecChUaHeaders } from "./transport.js";
 import type { GemaiConfig, GemaiHooks, ImageAttachment } from "./types.js";
 
 /** fetch wrapper — uses undici for all requests */
-async function smartFetch(
-  url: string,
-  init: UndiciRequestInit,
-): Promise<UndiciResponse> {
+async function smartFetch(url: string, init: UndiciRequestInit): Promise<UndiciResponse> {
   return undiciFetch(url, init);
 }
 

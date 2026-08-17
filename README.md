@@ -6,7 +6,7 @@
 
 [![npm version](https://img.shields.io/npm/v/nimji?style=flat-square&logo=npm&logoColor=white&color=cb3837)](https://www.npmjs.com/package/nimji)
 [![node](https://img.shields.io/badge/node-%3E%3D22.19-3C873A?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![ESM](https://img.shields.io/badge/module-ESM-f7df1e?style=flat-square&logo=javascript&logoColor=black)](https://nodejs.org/api/esm.html)
 
@@ -73,7 +73,8 @@ export F_SID="-7468331635213129869"
 
 ---
 
-## CLI
+<details>
+<summary><h2>CLI</h2></summary>
 
 ### One-shot
 
@@ -149,9 +150,12 @@ IMAGE_PIPELINE_ENABLED=1 nimji --image --save-images --upload "a watercolor cat"
 | `--version` / `-v`               | Print version and exit                                       |
 | `--help` / `-h`                  | Print help and exit                                          |
 
+</details>
+
 ---
 
-## Library
+<details>
+<summary><h2>Library</h2></summary>
 
 ### Quick start
 
@@ -272,6 +276,8 @@ Uploads a local file via Gemini's two-step resumable-upload endpoint and returns
 
 Maps a file extension to its MIME type. Returns `"application/octet-stream"` for unknown extensions.
 
+</details>
+
 ---
 
 ## Configuration files
@@ -324,7 +330,7 @@ Keys use the same names as environment variables. See [`config.jsonc`](config.js
 | `USER_AGENT`             | Chrome UA        | Custom `User-Agent` header                          |
 | `LANGUAGE`               | `en`             | Gemini request language                             |
 | `ACCEPT_LANGUAGE`        | `en-US,en;q=0.9` | `Accept-Language` header                            |
-| `CHROME_FULL_VERSION`    | `147.0.7727.56`  | Chrome version for client-hint headers              |
+| `CHROME_FULL_VERSION`    | `151.0.7922.138` | Chrome version for client-hint headers              |
 | `IMAGE_PIPELINE_ENABLED` | —                | Set to `1` to enable image download/save/upload     |
 | `IMG_BB_API_KEY`         | —                | ImgBB API key for `--upload`                        |
 | `IMG_BB_EXPIRATION_SEC`  | `0` (permanent)  | ImgBB link TTL                                      |
@@ -440,6 +446,8 @@ Tests live in `tests/` and use Node's built-in `node:test` + `node:assert` — n
 | `session.test.ts`   | `createSessionStore` — load, save, clear, field normalization, size caps, round-trip                                                                    |
 | `images.test.ts`    | `inferMimeTypeFromPath`, `IMAGE_PIPELINE_DISABLED` env flag, disabled-path fast-returns                                                                 |
 | `client.test.ts`    | `createClient` validation, conversation get/set/reset, keepalive lifecycle, `create()` / `createClientFromEnv()` factories                              |
+| `result.test.ts`    | Result type — ok, err, tryCatch, tryAsync, unwrap, match                                                                                                |
+| `paths.test.ts`     | `resolveAppHomeDir`                                                                                                                                     |
 
 ```bash
 npm test
@@ -457,8 +465,10 @@ nimji/
 │   ├── index.ts        # Public library surface
 │   ├── parser.ts       # extractResponse — text candidates, image URLs, conversation IDs
 │   ├── paths.ts        # resolveAppHomeDir
+│   ├── result.ts       # Custom Result<T,E> type (Rust-style, zero deps)
 │   ├── session.ts      # createSessionStore — session.json persistence
 │   ├── transport.ts    # buildPayload, buildStreamGeneratePath, parseStreamChunks, …
+│   ├── types.ts        # Type definitions
 │   └── runtime/
 │       └── keepalive.ts  # Detached keepalive daemon
 ├── tests/
@@ -484,6 +494,6 @@ nimji/
 
 <div align="center">
 
-MIT © [Mra1k3r0](https://github.com/Mra1k3r0)
+MIT © [Mra1k3r0](https://github.com/Mra1k3r0) · Powered by [undici](https://undici.nodejs.org)
 
 </div>
