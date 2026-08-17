@@ -7,9 +7,9 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
 import { createClient } from "./client.js";
-import { rotateCookies } from "./transport.js";
 import { IMAGE_PIPELINE_DISABLED, inferMimeTypeFromPath, uploadImageToGemini } from "./images.js";
 import { loadConfigFromEnv, mergeProjectConfigIntoEnv, validateConfig } from "./config.js";
+import { refreshSession } from "./bard-utils.js";
 import { resolveAppHomeDir } from "./paths.js";
 import { createSessionStore } from "./session.js";
 import { tryCatch, tryAsync } from "./result.js";
@@ -209,9 +209,9 @@ function printHelp(): void {
   console.log("  --no-retry                  Disable generate retries");
   console.log("  --density compact|comfortable   --answer-style plain|boxed");
   console.log("");
-  console.log("Environment (required): COOKIES, AT_TOKEN, F_SID");
+  console.log("Environment (required): COOKIES");
   console.log(
-    "Optional: MODEL (auto | paste full boq_* bl string), BL_PARAM (overrides MODEL), USER_AGENT, NIMJI_HOME (fallback GEMAI_HOME), NIMJI_CONFIG (fallback GEMAI_CONFIG), UI_DENSITY, UI_ANSWER_STYLE, DEBUG_CANDIDATES=1, IMAGE_PIPELINE_ENABLED=1 (enable image download/save), NO_COLOR, FORCE_COLOR",
+    "Optional: AT_TOKEN, F_SID (auto-extracted when missing), MODEL (auto | paste full boq_* bl string), BL_PARAM (overrides MODEL), USER_AGENT, NIMJI_HOME (fallback GEMAI_HOME), NIMJI_CONFIG (fallback GEMAI_CONFIG), UI_DENSITY, UI_ANSWER_STYLE, DEBUG_CANDIDATES=1, IMAGE_PIPELINE_ENABLED=1 (enable image download/save), NO_COLOR, FORCE_COLOR",
   );
   console.log(
     "Keepalive extras: KEEPALIVE_RPC, KEEPALIVE_F_REQ_PATH | KEEPALIVE_F_REQ, KEEPALIVE_INNER_PAYLOAD, KEEPALIVE_GOOG_EXT_525001261_JSPB",
@@ -964,7 +964,7 @@ async function main(): Promise<void> {
 
   const config = loadConfigFromEnv();
 
-  // Warn if .env file is older than 24h — AT_TOKEN/F_SID may be stale
+  // Warn if .env file is older than 24h — COOKIES may be stale
   const envPaths = [".env", path.resolve(resolveAppHomeDir(), ".env")];
   for (const envPath of envPaths) {
     const result = tryCatch(() => {
@@ -974,7 +974,7 @@ async function main(): Promise<void> {
       if (ageH >= 24) {
         banner(
           "warn",
-          `.env is ${ageH}h old — AT_TOKEN/F_SID may be stale. Re-export from browser extension.`,
+          `.env is ${ageH}h old — COOKIES may be stale. Re-export from browser extension.`,
         );
       }
     });
@@ -1014,18 +1014,29 @@ async function main(): Promise<void> {
         };
       }
     }
-    const checked = validateConfig(effectiveConfig);
-    if (checked.ok) {
-      const result = await rotateCookies(checked.value);
-      if (result.ok) {
-        effectiveConfig = {
-          ...effectiveConfig,
-          auth: { ...effectiveConfig.auth, cookies: result.value.cookies },
-        };
-        await store.saveRotatedCookies(result.value.cookies, result.value.rotatedAt);
-        banner("ok", "cookies rotated");
+
+    // Refresh session via bard-utils API (extracts f.sid + at_token + rotates cookies)
+    const refresh = await refreshSession({
+      cookies: effectiveConfig.auth.cookies,
+      userAgent: effectiveConfig.context.userAgent,
+    });
+    if (refresh) {
+      effectiveConfig = {
+        ...effectiveConfig,
+        auth: {
+          ...effectiveConfig.auth,
+          cookies: refresh.cookies,
+          fSid: effectiveConfig.auth.fSid || refresh.fSid || "",
+          atToken: effectiveConfig.auth.atToken || refresh.atToken || "",
+        },
+      };
+      if (!noSession) {
+        await store.saveRotatedCookies(refresh.cookies, refresh.rotatedAt);
       }
+      banner("ok", "session refreshed via bard-utils");
     }
+
+    const checked = validateConfig(effectiveConfig);
     return createClient(effectiveConfig, hooks);
   });
   if (initResult.isErr()) {

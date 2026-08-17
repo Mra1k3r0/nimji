@@ -20,6 +20,8 @@ export {
   validateConfig,
 } from "./config.js";
 export type { ConfigOverrides, ConfigPick, CreateInput, LoadConfigOptions } from "./config.js";
+export { refreshSession } from "./bard-utils.js";
+export type { RefreshResult } from "./bard-utils.js";
 export {
   buildBatchexecuteKeepaliveBody,
   buildBatchexecuteHeaders,

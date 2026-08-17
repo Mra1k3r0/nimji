@@ -7,9 +7,9 @@ import {
   isSessionExpiredResponse,
   parseStreamChunks,
   readStreamWithTimeouts,
-  rotateCookies,
   runBatchexecuteKeepalive,
 } from "./transport.js";
+import { refreshSession } from "./bard-utils.js";
 import { discoverLh3ImageUrls, extractResponse, sortStableGoogleImageUrls } from "./parser.js";
 import { downloadImages, upgradeGgDlUrlsFromRedirects, downloadSingleImage } from "./images.js";
 import type {
@@ -35,7 +35,7 @@ import {
 
 /**
  * Gemini web client with queued `generate`, rolling conversation state, and optional timer keepalive.
- * Validates required auth (`COOKIES`, `AT_TOKEN`, `F_SID`) and throws if anything is missing.
+ * Validates required auth (`COOKIES`) and throws if missing. `AT_TOKEN`/`F_SID` are auto-extracted via bard-utils when absent.
  */
 export function createClient(
   config: GemaiConfig,
@@ -259,24 +259,15 @@ export function createClient(
             reqId: String(Math.floor(1_000_000 + Math.random() * 9_000_000)),
           },
         };
-        void rotateCookies(kaConfig).then((result) =>
-          result.match({
-            ok: (rotated) => {
-              authOverride = { ...authOverride, cookies: rotated.cookies };
-            },
-            err: (error) => {
-              const isSessionExpired = error.message.includes("Session expired");
-              if (isSessionExpired) {
-                console.error(
-                  `[keepalive] FATAL: Session expired, re-login needed — ${error.message}`,
-                );
-                stopKeepalive();
-              }
-              // Transient errors: log and continue — next batchexecute cycle
-              // will still run.
-            },
-          }),
-        );
+
+        void refreshSession({
+          cookies: kaConfig.auth.cookies,
+          userAgent: kaConfig.context.userAgent,
+        }).then((result) => {
+          if (result) {
+            authOverride = { ...authOverride, cookies: result.cookies };
+          }
+        });
       }, rotateIntervalMs);
     }
   };
@@ -309,7 +300,7 @@ export function createClient(
 }
 
 /**
- * Primary wrapper: same env-style keys as `process.env` / `config.jsonc` (`COOKIES`, `AT_TOKEN`, …).
+ * Primary wrapper: same env-style keys as `process.env` / `config.jsonc` (`COOKIES`, optional `AT_TOKEN`, …).
  * Values can be literals or `process.env.FOO`. Project JSON + env are merged first; `input` overrides per field without mutating global env.
  * Optional `keepalive: true` (defaults on) or `keepalive: {}` / partial options — same as second-arg `{ keepalive }`; second arg wins when both set.
  */

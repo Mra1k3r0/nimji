@@ -323,12 +323,10 @@ export function loadConfigFromEnv(options?: LoadConfigOptions): GemaiConfig {
   };
 }
 
-/** Ensures `COOKIES`, `AT_TOKEN`, and `F_SID` are present before hitting Gemini. */
+/** Ensures `COOKIES` is present before hitting Gemini. */
 export function validateConfig(config: GemaiConfig): Result<GemaiConfig> {
   const missing: string[] = [];
   if (!config.auth.cookies) missing.push("COOKIES");
-  if (!config.auth.atToken) missing.push("AT_TOKEN");
-  if (!config.auth.fSid) missing.push("F_SID");
 
   if (missing.length > 0) {
     return fail(

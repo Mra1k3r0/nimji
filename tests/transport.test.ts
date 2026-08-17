@@ -16,7 +16,6 @@ import {
   chromeMajorFromFullVersion,
   parseCookies,
   serializeCookies,
-  updateCookieString,
   isSessionExpiredResponse,
 } from "../src/transport.js";
 import type { GemaiConfig } from "../src/types.js";
@@ -443,45 +442,6 @@ describe("serializeCookies", () => {
       ["M", "3"],
     ]);
     assert.equal(serializeCookies(map), "Z=1; A=2; M=3");
-  });
-});
-
-describe("updateCookieString", () => {
-  it("adds a new cookie to an existing string", () => {
-    const result = updateCookieString("SID=abc", new Map([["HSID", "def"]]));
-    assert.ok(result.includes("SID=abc"));
-    assert.ok(result.includes("HSID=def"));
-  });
-
-  it("replaces an existing cookie value", () => {
-    const result = updateCookieString("SID=old; HSID=def", new Map([["SID", "new"]]));
-    assert.ok(result.includes("SID=new"));
-    assert.ok(!result.includes("SID=old"));
-    assert.ok(result.includes("HSID=def"));
-  });
-
-  it("handles empty original string", () => {
-    const result = updateCookieString("", new Map([["SID", "abc"]]));
-    assert.equal(result, "SID=abc");
-  });
-
-  it("handles empty updates map", () => {
-    const result = updateCookieString("SID=abc", new Map());
-    assert.equal(result, "SID=abc");
-  });
-
-  it("updates multiple cookies at once", () => {
-    const result = updateCookieString(
-      "SID=old1; HSID=old2",
-      new Map([
-        ["SID", "new1"],
-        ["HSID", "new2"],
-      ]),
-    );
-    assert.ok(result.includes("SID=new1"));
-    assert.ok(result.includes("HSID=new2"));
-    assert.ok(!result.includes("old1"));
-    assert.ok(!result.includes("old2"));
   });
 });
 

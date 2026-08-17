@@ -1,7 +1,8 @@
 import path from "node:path";
 import { resolveAppHomeDir } from "../paths.js";
 import { createSessionStore, loadConfigFromEnv, validateConfig } from "../index.js";
-import { runBatchexecuteKeepalive, rotateCookies } from "../transport.js";
+import { runBatchexecuteKeepalive } from "../transport.js";
+import { refreshSession } from "../bard-utils.js";
 
 const toPositiveInt = (raw: string | undefined, fallback: number): number => {
   const parsed = Number(raw);
@@ -74,28 +75,29 @@ export async function runKeepalive(options?: { once?: boolean; quiet?: boolean }
 
     const shouldRotate = rotateEnabled && now - lastRotateAt >= rotateIntervalMs;
     if (shouldRotate) {
-      const rotateResult = await rotateCookies(config);
-      if (rotateResult.ok) {
-        lastRotateAt = rotateResult.value.rotatedAt;
+      const refresh = await refreshSession({
+        cookies: config.auth.cookies,
+        userAgent: config.context.userAgent,
+      });
+      if (refresh) {
+        lastRotateAt = refresh.rotatedAt;
         config = {
           ...config,
-          auth: { ...config.auth, cookies: rotateResult.value.cookies },
+          auth: {
+            ...config.auth,
+            cookies: refresh.cookies,
+            fSid: config.auth.fSid || refresh.fSid || "",
+            atToken: config.auth.atToken || refresh.atToken || "",
+          },
         };
-        await store.saveRotatedCookies(rotateResult.value.cookies, rotateResult.value.rotatedAt);
+        await store.saveRotatedCookies(refresh.cookies, refresh.rotatedAt);
         if (!quiet) {
-          console.log(`[keepalive] #${cycle} cookies rotated @ ${startedAt}`);
+          console.log(`[keepalive] #${cycle} session refreshed via bard-utils @ ${startedAt}`);
         }
       } else {
-        const isSessionExpired = rotateResult.error.message.includes("Session expired");
-        if (isSessionExpired) {
-          console.error(
-            `[keepalive] FATAL: Session expired, re-login needed — ${rotateResult.error.message}`,
-          );
-          break;
-        }
         if (!quiet) {
           console.warn(
-            `[keepalive] #${cycle} rotate warning @ ${startedAt} | ${rotateResult.error.message}`,
+            `[keepalive] #${cycle} refresh failed @ ${startedAt}`,
           );
         }
       }

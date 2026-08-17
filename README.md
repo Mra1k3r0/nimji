@@ -53,21 +53,21 @@ npm install nimji
 
 ## Credentials
 
-nimji talks directly to the Gemini web `StreamGenerate` endpoint using your browser session. You need three values from DevTools (Network tab, any `StreamGenerate` request):
+nimji talks directly to the Gemini web `StreamGenerate` endpoint using your browser session. You only need **one thing**:
 
-| Variable   | Where to find it                                              |
-| ---------- | ------------------------------------------------------------- |
-| `COOKIES`  | `Cookie:` request header — the full `SID=…; HSID=…; …` string |
-| `AT_TOKEN` | `at=` field in the POST body                                  |
-| `F_SID`    | `f.sid=` query param in the URL                               |
+| Variable  | Where to find it                                              |
+| --------- | ------------------------------------------------------------- |
+| `COOKIES` | `Cookie:` request header — the full `SID=…; HSID=…; …` string |
 
-Set them as environment variables, in a `.env` file, or in a `config.jsonc` (see [Configuration files](#configuration-files)).
+Set it as an environment variable, in a `.env` file, or in a `config.jsonc` (see [Configuration files](#configuration-files)).
 
 ```bash
 export COOKIES="SID=g.a000…"
-export AT_TOKEN="AOOh0PE…"
-export F_SID="-7468331635213129869"
 ```
+
+That's it. `AT_TOKEN` and `F_SID` are extracted automatically via the [bard-utils](https://github.com/Mra1k3r0/bard-utils) REST API when missing.
+
+> **Legacy** — nimji used to require `AT_TOKEN` and `F_SID` to be manually copy-pasted from DevTools. imagine doing all that work when the API just does it for you 💀 remove them from your `.env` and touch grass
 
 > **Note** — credentials are tied to your browser session and rotate when you sign out or Chrome rotates them. Re-capture from DevTools when requests start failing.
 
@@ -164,8 +164,6 @@ import { create } from "nimji";
 
 const client = create({
   COOKIES: process.env.COOKIES ?? "",
-  AT_TOKEN: process.env.AT_TOKEN ?? "",
-  F_SID: process.env.F_SID ?? "",
 });
 
 const res = await client.generate({ prompt: "hello" });
@@ -178,7 +176,7 @@ client.stopKeepalive();
 ```ts
 import { create, uploadImageToGemini, inferMimeTypeFromPath } from "nimji";
 
-const client = create({ COOKIES: "…", AT_TOKEN: "…", F_SID: "…" });
+const client = create({ COOKIES: "…" });
 
 // 1. Upload the image → get a contribution token
 const attachment = await uploadImageToGemini(client.getConversation(), "./photo.png");
@@ -201,8 +199,6 @@ const client = createClient(
   loadConfigFromEnv({
     overrides: {
       COOKIES: process.env.COOKIES ?? "",
-      AT_TOKEN: process.env.AT_TOKEN ?? "",
-      F_SID: process.env.F_SID ?? "",
       MODEL: "auto", // or paste a boq_assistant-… bl string
       LANGUAGE: "en",
       DEBUG_CANDIDATES: "1", // log raw text candidate scores to stderr
@@ -224,7 +220,7 @@ const client = createClient(
 
 #### `create(input, hooksOrOptions?, options?)` → `GemaiClient`
 
-Convenience factory. Accepts flat env-style keys (`COOKIES`, `AT_TOKEN`, …) directly. Also accepts `keepalive: true | { intervalMs, prompt }` inline.
+Convenience factory. Accepts flat env-style keys (`COOKIES`, optional `AT_TOKEN`, …) directly. Also accepts `keepalive: true | { intervalMs, prompt }` inline.
 
 #### `createClient(config, hooksOrOptions?)` → `GemaiClient`
 
@@ -293,8 +289,7 @@ Keys use the same names as environment variables. See [`config.jsonc`](config.js
 ```jsonc
 {
   "COOKIES": "SID=…",
-  "AT_TOKEN": "AOOh0PE…",
-  "F_SID": "-746833163…",
+
   "MODEL": "auto",
 
   "chat": {
@@ -315,11 +310,9 @@ Keys use the same names as environment variables. See [`config.jsonc`](config.js
 
 ### Required
 
-| Variable   | Description                           |
-| ---------- | ------------------------------------- |
-| `COOKIES`  | Full browser session cookie string    |
-| `AT_TOKEN` | Anti-CSRF token from the POST body    |
-| `F_SID`    | Session identifier from the URL query |
+| Variable  | Description                        |
+| --------- | ---------------------------------- |
+| `COOKIES` | Full browser session cookie string |
 
 ### Optional
 

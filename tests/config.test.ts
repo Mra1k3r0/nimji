@@ -90,8 +90,8 @@ describe("validateConfig", () => {
       overrides: { COOKIES: "SID=x", AT_TOKEN: "", F_SID: "fid" },
     });
     const result = validateConfig(cfg);
-    assert.ok(!result.ok);
-    assert.ok(result.error.message.includes("AT_TOKEN"));
+    // AT_TOKEN is optional — validation should succeed with only COOKIES
+    assert.ok(result.ok);
   });
 
   it("fails when F_SID is missing", () => {
@@ -99,19 +99,19 @@ describe("validateConfig", () => {
       overrides: { COOKIES: "SID=x", AT_TOKEN: "tok", F_SID: "" },
     });
     const result = validateConfig(cfg);
-    assert.ok(!result.ok);
-    assert.ok(result.error.message.includes("F_SID"));
+    // F_SID is optional — validation should succeed with only COOKIES
+    assert.ok(result.ok);
   });
 
-  it("lists all missing fields in one error", () => {
+  it("lists only COOKIES as required in error", () => {
     const cfg = loadConfigFromEnv({
       overrides: { COOKIES: "", AT_TOKEN: "", F_SID: "" },
     });
     const result = validateConfig(cfg);
     assert.ok(!result.ok);
     assert.ok(result.error.message.includes("COOKIES"));
-    assert.ok(result.error.message.includes("AT_TOKEN"));
-    assert.ok(result.error.message.includes("F_SID"));
+    assert.ok(!result.error.message.includes("AT_TOKEN"));
+    assert.ok(!result.error.message.includes("F_SID"));
   });
 });
 

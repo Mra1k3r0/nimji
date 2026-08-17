@@ -8,7 +8,7 @@ export function buildStreamGeneratePath(config: GemaiConfig): string {
     `/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate` +
     `?source-path=${encodeURIComponent(config.context.sourcePath)}` +
     `&bl=${encodeURIComponent(config.context.blParam)}` +
-    `&f.sid=${encodeURIComponent(config.auth.fSid)}` +
+    `&f.sid=${encodeURIComponent(config.auth.fSid ?? "")}` +
     `&hl=${encodeURIComponent(config.context.language)}` +
     `&_reqid=${encodeURIComponent(config.context.reqId ?? "")}` +
     `&rt=c`
@@ -81,7 +81,7 @@ export function buildBatchexecutePath(config: GemaiConfig): string {
     `/_/BardChatUi/data/batchexecute?rpcids=${encodeURIComponent(rpc)}` +
     `&source-path=${encodeURIComponent(config.context.sourcePath)}` +
     `&bl=${encodeURIComponent(config.context.blParam)}` +
-    `&f.sid=${encodeURIComponent(config.auth.fSid)}` +
+    `&f.sid=${encodeURIComponent(config.auth.fSid ?? "")}` +
     `&hl=${encodeURIComponent(config.context.language)}` +
     `&_reqid=${encodeURIComponent(config.context.reqId ?? "")}` +
     `&rt=c`
@@ -106,7 +106,7 @@ export function buildBatchexecuteKeepaliveBody(config: GemaiConfig): string {
 
   const params = new URLSearchParams();
   params.set("f.req", fReqValue);
-  params.set("at", config.auth.atToken);
+  params.set("at", config.auth.atToken ?? "");
   return `${params.toString()}&`;
 }
 
@@ -342,7 +342,7 @@ export function buildPayload(
   const outer = JSON.stringify([null, inner]);
   const params = new URLSearchParams();
   params.set("f.req", outer);
-  params.set("at", config.auth.atToken);
+  params.set("at", config.auth.atToken ?? "");
   return `${params.toString()}&`;
 }
 
@@ -544,7 +544,6 @@ export async function rotateCookies(
       }
 
       if (updates.size === 0) {
-        // 200 but no Set-Cookie — treat as no-op
         return { cookies: config.auth.cookies, rotatedAt: Date.now() };
       }
 
