@@ -1,6 +1,6 @@
 {
   "name": "nimji",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Promise-first TypeScript client and nimji CLI for Gemini web chat: multi-turn sessions, configurable retries and keepalive, auth via env or JSON config, and a polished terminal UI.",
   "keywords": [
     "ai",
