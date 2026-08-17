@@ -1,29 +1,16 @@
-import { Impit, type HttpMethod } from "impit";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fetch as undiciFetch, type RequestInit as UndiciRequestInit, type Response as UndiciResponse } from "undici";
 import { tryAsync } from "./result.js";
 import { buildSecChUaHeaders } from "./transport.js";
 import type { GemaiConfig, GemaiHooks, ImageAttachment } from "./types.js";
 
-/** minimal response shape we actually use from both impit + undici */
-interface LiteResponse {
-  status: number;
-  ok: boolean;
-  headers: Headers;
-  text(): Promise<string>;
-  arrayBuffer(): Promise<ArrayBuffer>;
-}
-
-/** Singleton impit instance that impersonates Chrome's TLS fingerprint (JA3/JA4). */
-let _impit: Impit | null = null;
-function getImpit(): Impit {
-  if (!_impit) _impit = new Impit({ browser: "chrome" });
-  return _impit;
-}
-
-/** Returns true when the URL targets Google's protected CDN that checks TLS fingerprints. */
-function isProtectedCdn(url: string): boolean {
-  return url.includes("googleusercontent.com") || url.includes("gg-dl/");
+/** fetch wrapper — uses undici for all requests */
+async function smartFetch(
+  url: string,
+  init: UndiciRequestInit,
+): Promise<UndiciResponse> {
+  return undiciFetch(url, init);
 }
 
 /** chases the 3-hop gg-dl → fife → lh3 text/plain chain to get the image url */
@@ -77,28 +64,6 @@ async function followRedirectChain(config: GemaiConfig, url: string): Promise<st
   }
 
   return current;
-}
-
-/** fetch with auto impit for google cdn urls */
-async function smartFetch(
-  url: string,
-  init: RequestInit & { signal?: AbortSignal },
-): Promise<LiteResponse> {
-  if (isProtectedCdn(url)) {
-    const impit = getImpit();
-    const headers = Object.fromEntries(new Headers(init.headers as HeadersInit).entries());
-    const res = await impit.fetch(url, {
-      method: (init.method ?? "GET") as HttpMethod,
-      headers,
-      signal: init.signal,
-      redirect: (init.redirect as "follow" | "manual" | "error") ?? "follow",
-    });
-    return res;
-  }
-  return fetch(url, {
-    ...init,
-    redirect: init.redirect as RequestRedirect | undefined,
-  }) as Promise<LiteResponse>;
 }
 
 /** scrubs tokens/cookies from error bodies */
@@ -206,7 +171,7 @@ function buildHeaderProfiles(
   ];
 }
 
-async function drainResponseBody(res: LiteResponse): Promise<void> {
+async function drainResponseBody(res: UndiciResponse): Promise<void> {
   await tryAsync(() => res.arrayBuffer());
 }
 
