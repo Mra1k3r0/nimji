@@ -56,15 +56,15 @@ describe("createClient — validation", () => {
 
   it("throws when AT_TOKEN is missing", () => {
     // AT_TOKEN is optional — should not throw with only cookies + fSid
-    assert.doesNotThrow(
-      () => createClient({ ...validConfig(), auth: { cookies: "c", atToken: "", fSid: "f" } }),
+    assert.doesNotThrow(() =>
+      createClient({ ...validConfig(), auth: { cookies: "c", atToken: "", fSid: "f" } }),
     );
   });
 
   it("throws when F_SID is missing", () => {
     // F_SID is optional — should not throw with only cookies + atToken
-    assert.doesNotThrow(
-      () => createClient({ ...validConfig(), auth: { cookies: "c", atToken: "t", fSid: "" } }),
+    assert.doesNotThrow(() =>
+      createClient({ ...validConfig(), auth: { cookies: "c", atToken: "t", fSid: "" } }),
     );
   });
 

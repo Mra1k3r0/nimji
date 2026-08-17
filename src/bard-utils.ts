@@ -1,4 +1,4 @@
-import { fetch } from "undici";
+import { fetch, type RequestInit as UndiciRequestInit } from "undici";
 import { tryAsync } from "./result.js";
 
 const _u = Buffer.from(
@@ -6,6 +6,9 @@ const _u = Buffer.from(
   "hex",
 ).toString();
 const _e = _u;
+
+// ua
+const _ua = "nimji/0.2.1 (github.com/Mra1k3r0/nimji)";
 
 type BardUtilsResponse<T> = {
   readonly ok: boolean;
@@ -28,10 +31,13 @@ async function mintToken(baseUrl: string, apiKey?: string): Promise<string | nul
   const result = await tryAsync(async () => {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "x-nimji-ua": _ua,
+      },
       body,
       redirect: "follow",
-    } as any);
+    } as UndiciRequestInit);
     const json: unknown = await res.json();
     const typed = json as BardUtilsResponse<{ token: string }>;
     if (!typed.ok || !typed.data) return null;
@@ -60,13 +66,14 @@ export async function refreshSession(opts: {
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${token}`,
+        "x-nimji-ua": _ua,
       },
       body: JSON.stringify({
         cookies: opts.cookies,
         ...(opts.userAgent ? { userAgent: opts.userAgent } : {}),
       }),
       redirect: "follow",
-    } as any);
+    } as UndiciRequestInit);
 
     const json: unknown = await res.json();
     const typed = json as BardUtilsResponse<RefreshResult>;

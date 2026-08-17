@@ -54,11 +54,11 @@ async function refresh() {
 
   if (result.hasAll) {
     setStatus(
-      `Ready. Captured all values. Last capture: ${formatLastCapture(result.lastCapturedAt)}`,
+      `Ready. Cookies captured. Last capture: ${formatLastCapture(result.lastCapturedAt)}`,
       true,
     );
   } else {
-    setStatus("Missing tokens. Click here to open or focus gemini.google.com.", false);
+    setStatus("Missing cookies. Click here to open or focus gemini.google.com.", false);
   }
 }
 
@@ -83,7 +83,7 @@ copyBtn.addEventListener("click", async () => {
 clearBtn.addEventListener("click", async () => {
   await clearCapture();
   await refresh();
-  setStatus("Captured tokens cleared.", true);
+  setStatus("Captured cookies cleared.", true);
 });
 
 statusEl.addEventListener("click", () => {
@@ -98,7 +98,7 @@ async function init() {
     return;
   }
   await refresh();
-  if (!result.hasAll) {
+  if (!result.cookies) {
     await ensureGeminiIsOpen();
   }
 }

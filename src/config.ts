@@ -244,6 +244,27 @@ const randomSourcePath = (): string => randomUUID().replace(/-/g, "").slice(0, 1
 
 const DEFAULT_BL_BUILD = "boq_assistant-bard-web-server_20260812.16_p0";
 
+/** MODEL env → slot 79 in StreamGenerate (model selector). */
+const MODEL_SLOT_MAP: Record<string, number> = {
+  flash: 1,
+  "3.6-flash": 1,
+  pro: 3,
+  "3.1-pro": 3,
+  extended: 3,
+  "extended-thinking": 3,
+  "flash-lite": 6,
+  "3.5-flash-lite": 6,
+};
+
+function resolveModelSlot(pick: ConfigPick): number {
+  const raw = pick("MODEL", "").trim().toLowerCase();
+  if (!raw || /^auto$/i.test(raw)) return 6; // default: Flash-Lite
+  if (MODEL_SLOT_MAP[raw] !== undefined) return MODEL_SLOT_MAP[raw];
+  const num = Number(raw);
+  if (Number.isFinite(num)) return num;
+  return 6; // fallback
+}
+
 function resolveBlParam(pick: ConfigPick): string {
   const explicitBl = pick("BL_PARAM", "").trim();
   if (explicitBl) return explicitBl;
@@ -302,6 +323,7 @@ export function loadConfigFromEnv(options?: LoadConfigOptions): GemaiConfig {
         "Copyright 2026 Google LLC. All Rights reserved.",
       ),
       userAgent: userAgentRaw || defaultUserAgentForChrome(chromeFullVersion),
+      modelSlot: resolveModelSlot(pick),
     },
     conversation: {
       conversationId: pick("CONVERSATION_ID", "") || undefined,

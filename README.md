@@ -73,6 +73,38 @@ That's it. `AT_TOKEN` and `F_SID` are extracted automatically via the [bard-util
 
 ---
 
+## Supported Models
+
+Set the `MODEL` env var to choose which Gemini model to use:
+
+| Model                 | `MODEL` value | Speed  | Best for                               |
+| --------------------- | ------------- | ------ | -------------------------------------- |
+| **Flash-Lite**        | `flash-lite`  | ⚡⚡⚡ | Quick answers, default mode            |
+| **Flash**             | `flash`       | ⚡⚡   | Balanced speed and quality             |
+| **Pro**               | `pro`         | ⚡     | Advanced math, code, reasoning         |
+| **Extended Thinking** | `extended`    | 🐢     | Complex problem solving, deep analysis |
+
+```bash
+# Use Pro for complex tasks
+MODEL=pro nimji "explain the time complexity of quicksort with edge cases"
+
+# Use Flash for everyday queries
+MODEL=flash nimji "summarize this file"
+
+# Default (Flash-Lite) — fastest
+nimji "what's 2+2"
+```
+
+You can also set `MODEL` in your `.env` or `config.jsonc`:
+
+```jsonc
+{ "MODEL": "flash" }
+```
+
+> **Pro users** — Extended Thinking shares the same backend as Pro but enables deeper reasoning chains. Use it when you need step-by-step analysis rather than fast answers.
+
+---
+
 <details>
 <summary><h2>CLI</h2></summary>
 
@@ -316,25 +348,25 @@ Keys use the same names as environment variables. See [`config.jsonc`](config.js
 
 ### Optional
 
-| Variable                 | Default          | Description                                         |
-| ------------------------ | ---------------- | --------------------------------------------------- |
-| `MODEL`                  | `auto`           | `auto` or a full `boq_assistant-…` build string     |
-| `BL_PARAM`               | —                | Overrides `MODEL` when set; direct `bl=` value      |
-| `USER_AGENT`             | Chrome UA        | Custom `User-Agent` header                          |
-| `LANGUAGE`               | `en`             | Gemini request language                             |
-| `ACCEPT_LANGUAGE`        | `en-US,en;q=0.9` | `Accept-Language` header                            |
-| `CHROME_FULL_VERSION`    | `151.0.7922.138` | Chrome version for client-hint headers              |
-| `IMAGE_PIPELINE_ENABLED` | —                | Set to `1` to enable image download/save/upload     |
-| `IMG_BB_API_KEY`         | —                | ImgBB API key for `--upload`                        |
-| `IMG_BB_EXPIRATION_SEC`  | `0` (permanent)  | ImgBB link TTL                                      |
-| `NIMJI_HOME`             | `~/.nimji`       | Override the persistent state directory             |
-| `NIMJI_CONFIG`           | —                | Explicit config file path                           |
-| `UI_DENSITY`             | `comfortable`    | `compact` or `comfortable`                          |
-| `UI_ANSWER_STYLE`        | `boxed`          | `boxed` or `plain`                                  |
-| `DEBUG_CANDIDATES`       | `0`              | Set to `1` to log raw text candidate scores         |
-| `NO_COLOR`               | —                | Set to `1` to disable ANSI color output             |
-| `FORCE_COLOR`            | —                | Set to `1` to force color in non-TTY environments   |
-| `ENC_KEY`                | —                | Passphrase to encrypt rotated cookies (AES-256-GCM) |
+| Variable                 | Default          | Description                                                                      |
+| ------------------------ | ---------------- | -------------------------------------------------------------------------------- |
+| `MODEL`                  | `auto`           | Model selector: `flash`, `pro`, `flash-lite`, `extended`, or `auto` (Flash-Lite) |
+| `BL_PARAM`               | —                | Overrides `MODEL` when set; direct `bl=` value                                   |
+| `USER_AGENT`             | Chrome UA        | Custom `User-Agent` header                                                       |
+| `LANGUAGE`               | `en`             | Gemini request language                                                          |
+| `ACCEPT_LANGUAGE`        | `en-US,en;q=0.9` | `Accept-Language` header                                                         |
+| `CHROME_FULL_VERSION`    | `151.0.7922.138` | Chrome version for client-hint headers                                           |
+| `IMAGE_PIPELINE_ENABLED` | —                | Set to `1` to enable image download/save/upload                                  |
+| `IMG_BB_API_KEY`         | —                | ImgBB API key for `--upload`                                                     |
+| `IMG_BB_EXPIRATION_SEC`  | `0` (permanent)  | ImgBB link TTL                                                                   |
+| `NIMJI_HOME`             | `~/.nimji`       | Override the persistent state directory                                          |
+| `NIMJI_CONFIG`           | —                | Explicit config file path                                                        |
+| `UI_DENSITY`             | `comfortable`    | `compact` or `comfortable`                                                       |
+| `UI_ANSWER_STYLE`        | `boxed`          | `boxed` or `plain`                                                               |
+| `DEBUG_CANDIDATES`       | `0`              | Set to `1` to log raw text candidate scores                                      |
+| `NO_COLOR`               | —                | Set to `1` to disable ANSI color output                                          |
+| `FORCE_COLOR`            | —                | Set to `1` to force color in non-TTY environments                                |
+| `ENC_KEY`                | —                | Passphrase to encrypt rotated cookies (AES-256-GCM)                              |
 
 ### Stream timeouts
 

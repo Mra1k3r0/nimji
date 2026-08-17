@@ -319,7 +319,7 @@ export function buildPayload(
     null,
     null,
     null,
-    6, // slot 78: browser sends 6, not null
+    config.context.modelSlot ?? 6, // slot 79: model selector (1=Flash, 3=Pro/Extended, 6=Flash-Lite)
     1,
     null,
     null,

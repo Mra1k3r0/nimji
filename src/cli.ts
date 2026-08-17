@@ -1036,7 +1036,7 @@ async function main(): Promise<void> {
       banner("ok", "session refreshed via bard-utils");
     }
 
-    const checked = validateConfig(effectiveConfig);
+    validateConfig(effectiveConfig);
     return createClient(effectiveConfig, hooks);
   });
   if (initResult.isErr()) {

@@ -53,6 +53,8 @@ export type RequestContext = {
   readonly secChUaPlatformVersion: string;
   readonly browserChannel: string;
   readonly browserCopyright: string;
+  /** Slot 79 in StreamGenerate payload — model selector (1=Flash, 3=Pro/Extended, 6=Flash-Lite). */
+  readonly modelSlot?: number;
 };
 
 /**

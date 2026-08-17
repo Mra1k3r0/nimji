@@ -33,8 +33,9 @@ function shellQuote(value) {
 function buildEnvBlock(cookies, atToken, fSid, lh3Cookies) {
   const lines = [
     `COOKIES=${shellQuote(cookies)}`,
-    `AT_TOKEN=${shellQuote(atToken)}`,
-    `F_SID=${shellQuote(fSid)}`,
+    // AT_TOKEN and F_SID are now extracted automatically via bard-utils API — no longer needed
+    // `AT_TOKEN=${shellQuote(atToken)}`,
+    // `F_SID=${shellQuote(fSid)}`,
   ];
   if (lh3Cookies) {
     lines.push(`LH3_COOKIES=${shellQuote(lh3Cookies)}`);
@@ -115,9 +116,9 @@ async function rotateCookies() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Origin": "https://accounts.google.com",
-        "Referer": "https://accounts.google.com/",
-        "Cookie": cookieHeader,
+        Origin: "https://accounts.google.com",
+        Referer: "https://accounts.google.com/",
+        Cookie: cookieHeader,
       },
       body: JSON.stringify([0, "-0000000000000000000"]),
     });
@@ -244,7 +245,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         atToken,
         fSid,
         envBlock,
-        hasAll: Boolean(cookies && atToken && fSid),
+        hasAll: Boolean(cookies),
         lastCapturedAt: state.lastCapturedAt,
         lastUrl: state.lastUrl,
       });

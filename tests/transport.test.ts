@@ -178,6 +178,40 @@ describe("buildPayload — text-only", () => {
     // The UUID lives inside the inner JSON string
     assert.ok(outerDecoded.includes("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"));
   });
+
+  it("puts modelSlot in slot 79 (defaults to 6)", () => {
+    const body = buildPayload(makeConfig(), "test");
+    const outerDecoded = decodeURIComponent(body.split("f.req=")[1]!.split("&")[0]!);
+    const outer = JSON.parse(outerDecoded) as [null, string];
+    const inner = JSON.parse(outer[1]) as unknown[];
+    assert.equal(inner[79], 6, "slot 79 should default to 6 (Flash-Lite)");
+  });
+
+  it("puts modelSlot=1 in slot 79 for Flash", () => {
+    const cfg = makeConfig({ modelSlot: 1 });
+    const body = buildPayload(cfg, "test");
+    const outerDecoded = decodeURIComponent(body.split("f.req=")[1]!.split("&")[0]!);
+    const outer = JSON.parse(outerDecoded) as [null, string];
+    const inner = JSON.parse(outer[1]) as unknown[];
+    assert.equal(inner[79], 1, "slot 79 should be 1 for Flash");
+  });
+
+  it("puts modelSlot=3 in slot 79 for Pro", () => {
+    const cfg = makeConfig({ modelSlot: 3 });
+    const body = buildPayload(cfg, "test");
+    const outerDecoded = decodeURIComponent(body.split("f.req=")[1]!.split("&")[0]!);
+    const outer = JSON.parse(outerDecoded) as [null, string];
+    const inner = JSON.parse(outer[1]) as unknown[];
+    assert.equal(inner[79], 3, "slot 79 should be 3 for Pro");
+  });
+
+  it("sets slot 78 to null (not 6)", () => {
+    const body = buildPayload(makeConfig(), "test");
+    const outerDecoded = decodeURIComponent(body.split("f.req=")[1]!.split("&")[0]!);
+    const outer = JSON.parse(outerDecoded) as [null, string];
+    const inner = JSON.parse(outer[1]) as unknown[];
+    assert.equal(inner[78], null, "slot 78 should be null");
+  });
 });
 
 describe("buildPayload — image attachment", () => {

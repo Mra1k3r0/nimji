@@ -96,9 +96,7 @@ export async function runKeepalive(options?: { once?: boolean; quiet?: boolean }
         }
       } else {
         if (!quiet) {
-          console.warn(
-            `[keepalive] #${cycle} refresh failed @ ${startedAt}`,
-          );
+          console.warn(`[keepalive] #${cycle} refresh failed @ ${startedAt}`);
         }
       }
     }

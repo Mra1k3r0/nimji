@@ -178,6 +178,59 @@ describe("loadConfigFromEnv — context defaults", () => {
     });
     assert.equal(cfg.context.language, "fr");
   });
+
+  it("maps MODEL=flash to modelSlot=1", () => {
+    const cfg = loadConfigFromEnv({
+      overrides: { COOKIES: "c", AT_TOKEN: "t", F_SID: "f", MODEL: "flash" },
+    });
+    assert.equal(cfg.context.modelSlot, 1);
+  });
+
+  it("maps MODEL=pro to modelSlot=3", () => {
+    const cfg = loadConfigFromEnv({
+      overrides: { COOKIES: "c", AT_TOKEN: "t", F_SID: "f", MODEL: "pro" },
+    });
+    assert.equal(cfg.context.modelSlot, 3);
+  });
+
+  it("maps MODEL=flash-lite to modelSlot=6", () => {
+    const cfg = loadConfigFromEnv({
+      overrides: { COOKIES: "c", AT_TOKEN: "t", F_SID: "f", MODEL: "flash-lite" },
+    });
+    assert.equal(cfg.context.modelSlot, 6);
+  });
+
+  it("maps MODEL=extended to modelSlot=3 (same as Pro)", () => {
+    const cfg = loadConfigFromEnv({
+      overrides: { COOKIES: "c", AT_TOKEN: "t", F_SID: "f", MODEL: "extended" },
+    });
+    assert.equal(cfg.context.modelSlot, 3);
+  });
+
+  it("defaults modelSlot to 6 (Flash-Lite) when MODEL=auto", () => {
+    const cfg = loadConfigFromEnv({
+      overrides: { COOKIES: "c", AT_TOKEN: "t", F_SID: "f", MODEL: "auto" },
+    });
+    assert.equal(cfg.context.modelSlot, 6);
+  });
+
+  it("accepts raw numeric MODEL as modelSlot", () => {
+    const cfg = loadConfigFromEnv({
+      overrides: { COOKIES: "c", AT_TOKEN: "t", F_SID: "f", MODEL: "42" },
+    });
+    assert.equal(cfg.context.modelSlot, 42);
+  });
+
+  it("maps 3.6-flash and 3.1-pro aliases correctly", () => {
+    const flash = loadConfigFromEnv({
+      overrides: { COOKIES: "c", AT_TOKEN: "t", F_SID: "f", MODEL: "3.6-flash" },
+    });
+    assert.equal(flash.context.modelSlot, 1);
+    const pro = loadConfigFromEnv({
+      overrides: { COOKIES: "c", AT_TOKEN: "t", F_SID: "f", MODEL: "3.1-pro" },
+    });
+    assert.equal(pro.context.modelSlot, 3);
+  });
 });
 
 describe("loadConfigFromEnv — runtime defaults", () => {
